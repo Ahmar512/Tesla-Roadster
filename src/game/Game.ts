@@ -824,9 +824,9 @@ export class Game {
     }
     this.setNear(CAMERA_NEAR);
 
-    // Follow height loosely for hops, closely when riding a carrier, and only
-    // partway when flying so the road visibly drops away below.
-    const lift = p.flying ? 0.5 : p.y > 2 ? 0.8 : 0.35;
+    // Follow height loosely for hops and closely when riding a carrier. When
+    // flying, rise above the car so the sky lane's pickups ahead stay in view.
+    const lift = p.flying || p.y > 2 ? 0.8 : 0.35;
     this.crashZoom = damp(this.crashZoom, ['crashed', 'revive', 'over'].includes(this.state) ? 1 : 0, 4, dt);
     this.landBump = damp(this.landBump, 0, 10, dt);
     this.cameraBase.x = damp(this.cameraBase.x, p.x * 0.6, 6, dt);
@@ -842,7 +842,7 @@ export class Game {
       cam.position.y += (Math.random() - 0.5) * s;
     }
 
-    this.lookTarget.set(p.x * 0.4, 0.8 + p.y * (p.flying ? 0.25 : lift - 0.15), -12);
+    this.lookTarget.set(p.x * 0.4, 0.8 + p.y * (p.flying ? 0.5 : lift - 0.15), -12);
     cam.lookAt(this.lookTarget);
 
     // Widen the view as speed builds (and a lot more on nitro).
