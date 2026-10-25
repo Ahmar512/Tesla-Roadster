@@ -36,6 +36,8 @@ export class LevelGenerator {
   private reserved: { lane: number; nearZ: number; farZ: number }[] = [];
   private skyUntilZ: number | null = null;
   private skyLane = 1;
+  /** Extra shield weight from the shield upgrade. */
+  shieldBonus = 0;
 
   constructor(
     private readonly obstacles: ObstacleManager,
@@ -129,7 +131,7 @@ export class LevelGenerator {
     this.untilPowerUp -= length + gap;
     if (this.untilPowerUp <= 0) {
       this.untilPowerUp = THREE.MathUtils.randFloat(...POWER_UP_EVERY);
-      this.pickups.spawnPowerUp(randomPowerUp(), LANES[THREE.MathUtils.randInt(0, 2)], start - length - gap / 2);
+      this.pickups.spawnPowerUp(randomPowerUp(this.shieldBonus), LANES[THREE.MathUtils.randInt(0, 2)], start - length - gap / 2);
     }
     this.nextZ = start - length - gap;
   }

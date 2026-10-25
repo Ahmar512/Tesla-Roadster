@@ -9,17 +9,16 @@ import {
   LANE_CHANGE_SHARPNESS,
   LANES,
   PLAYER,
-  PLAYER_COLOR,
 } from '../config';
 import type { Action } from '../game/Input';
-import { extrudeSide, mergeParts, wheelParts } from '../render/geometry';
-import { curved, glowMaterial, outlineMaterial, vehicleMaterial } from '../render/materials';
+import { curved } from '../render/materials';
 import { createBlobShadow } from '../render/shadow';
+import type { SkinId } from '../meta/catalog';
+import type { MergedParts } from '../render/geometry';
+import { buildRoadster, WHEEL_RADIUS } from './roadsterModel';
+import { paintCar } from './skins';
 
-const WHEEL_RADIUS = 0.33;
-
-/** Thruster nozzle positions relative to the car, used to emit flames. */
-export const NOZZLES = { x: [-0.35, 0.35], y: 0.42, z: 2.15 };
+export { NOZZLES } from './roadsterModel';
 
 const NOZZLE_IDLE = new THREE.Color(0x8a2a00);
 const NOZZLE_HOT = new THREE.Color(0xffe2a0);
@@ -41,6 +40,8 @@ export class Player {
 
   private readonly model = new THREE.Group();
   private readonly wheels: THREE.Mesh[] = [];
+  private shell!: MergedParts;
+  private underglow!: THREE.Mesh;
   private readonly nozzleMaterial = curved(new THREE.MeshBasicMaterial({ color: NOZZLE_IDLE.clone() }));
   private readonly shadow = createBlobShadow(2.3, 4.6, true);
   private readonly shield = new THREE.Mesh(
@@ -239,65 +240,17 @@ export class Player {
     (this.shadow.material as THREE.MeshBasicMaterial).opacity = 0.5 * s;
   }
 
-  /** Placeholder stylized roadster; faces -z. */
   private buildModel() {
-    const body = extrudeSide(
-      (s) => {
-        s.moveTo(-1.95, 0.34);
-        s.lineTo(1.9, 0.34);
-        s.quadraticCurveTo(2.1, 0.36, 2.06, 0.5);
-        s.quadraticCurveTo(1.6, 0.6, 0.6, 0.62);
-        s.lineTo(-1.6, 0.66);
-        s.quadraticCurveTo(-1.95, 0.66, -1.95, 0.5);
-        s.closePath();
-      },
-      1.64,
-      0.14,
-    );
-    const canopy = extrudeSide(
-      (s) => {
-        s.moveTo(0.62, 0.6);
-        s.quadraticCurveTo(0.1, 0.93, -0.4, 0.95);
-        s.quadraticCurveTo(-1.1, 0.95, -1.45, 0.62);
-        s.closePath();
-      },
-      1.2,
-      0.08,
-    );
+    const car = buildRoadster(this.nozzleMaterial);
+    this.wheels.push(...car.wheels);
+    this.shell = car.shell;
+    this.underglow = car.underglow;
+    this.model.add(...car.object.children);
+  }
 
-    const shell = mergeParts(
-      [
-        { geometry: body, color: PLAYER_COLOR, tag: 'paint' },
-        { geometry: canopy, color: 0x1c2533 },
-        { geometry: new THREE.BoxGeometry(1.3, 0.16, 0.3), color: 0x18181c, at: [0, 0.3, 1.98] }, // diffuser
-        { geometry: new THREE.BoxGeometry(1.58, 0.2, 0.06), color: 0x18181c, at: [0, 0.6, 2.06] }, // taillight housing
-        { geometry: new THREE.BoxGeometry(0.12, 0.1, 0.22), color: PLAYER_COLOR, at: [-0.82, 0.82, -0.35] }, // mirrors
-        { geometry: new THREE.BoxGeometry(0.12, 0.1, 0.22), color: PLAYER_COLOR, at: [0.82, 0.82, -0.35] },
-      ],
-      true,
-    ).geometry;
-    this.model.add(new THREE.Mesh(shell, vehicleMaterial), new THREE.Mesh(shell, outlineMaterial));
-
-    const lights = mergeParts([
-      { geometry: new THREE.BoxGeometry(1.48, 0.1, 0.05), color: 0xff3030, at: [0, 0.6, 2.1] }, // taillight bar
-      { geometry: new THREE.BoxGeometry(0.4, 0.06, 0.05), color: 0xffffff, at: [-0.55, 0.5, -2.13] },
-      { geometry: new THREE.BoxGeometry(0.4, 0.06, 0.05), color: 0xffffff, at: [0.55, 0.5, -2.13] },
-    ]).geometry;
-    this.model.add(new THREE.Mesh(lights, glowMaterial));
-
-    const nozzleGeo = new THREE.CylinderGeometry(0.1, 0.14, 0.25, 14).rotateX(Math.PI / 2);
-    for (const x of NOZZLES.x) {
-      const nozzle = new THREE.Mesh(nozzleGeo, this.nozzleMaterial);
-      nozzle.position.set(x, NOZZLES.y, 2.04);
-      this.model.add(nozzle);
-    }
-
-    const wheelGeo = mergeParts(wheelParts(WHEEL_RADIUS, 0.28)).geometry;
-    for (const [x, z] of [[-0.8, -1.25], [0.8, -1.25], [-0.8, 1.25], [0.8, 1.25]]) {
-      const wheel = new THREE.Mesh(wheelGeo, vehicleMaterial);
-      wheel.position.set(x, WHEEL_RADIUS, z);
-      this.wheels.push(wheel);
-      this.model.add(wheel);
-    }
+  /** Paint color and skin from the garage. */
+  setLook(paint: number, skin: SkinId) {
+    paintCar(this.shell, paint, skin);
+    this.underglow.visible = skin === 'neon';
   }
 }

@@ -36,7 +36,10 @@
 
     <div id="title-screen" class="screen">
       <div class="top-bar">
-        <div class="pill"><span class="cell-icon"></span><span id="title-cells">0</span></div>
+        <div class="pills">
+          <div class="pill"><span class="cell-icon"></span><span id="title-cells">0</span></div>
+          <div class="pill pill-mult">×<span id="title-mult">1</span></div>
+        </div>
         <button id="settings-btn" class="icon-btn" aria-label="Settings">
           <svg viewBox="0 0 24 24"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Zm8.4 5-.1-3 2-1.6-2-3.4-2.4.9a8 8 0 0 0-2.6-1.5L14.9 2H9.1l-.4 2.9a8 8 0 0 0-2.6 1.5l-2.4-1-2 3.5 2 1.6a8 8 0 0 0 0 3l-2 1.6 2 3.4 2.4-.9a8 8 0 0 0 2.6 1.5l.4 2.9h5.8l.4-2.9a8 8 0 0 0 2.6-1.5l2.4.9 2-3.4-2-1.6Z" /></svg>
         </button>
@@ -47,7 +50,29 @@
       </div>
       <div class="title-bottom">
         <div class="tap-hint">TAP TO PLAY</div>
-        <button id="garage-btn" class="btn btn-small btn-blue" disabled>GARAGE <span class="soon">SOON</span></button>
+        <div class="row">
+          <button id="garage-btn" class="btn btn-small btn-blue">GARAGE</button>
+          <button id="missions-btn" class="btn btn-small btn-blue">MISSIONS <span id="missions-badge" class="badge hidden"></span></button>
+          <button id="trophies-btn" class="btn btn-small btn-blue">TROPHIES</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="garage-screen" class="screen garage off">
+      <div class="top-bar">
+        <button id="garage-back" class="icon-btn" aria-label="Back">
+          <svg viewBox="0 0 24 24"><path d="M15.5 4 7 12l8.5 8 2-2.1L11.3 12l6.2-5.9z" /></svg>
+        </button>
+        <h2>GARAGE</h2>
+        <div class="pill"><span class="cell-icon"></span><span id="garage-cells">0</span></div>
+      </div>
+      <div class="sheet">
+        <div id="garage-tabs" class="tabs">
+          <button data-tab="paint" aria-pressed="true">PAINT</button><button data-tab="skins">SKINS</button><button data-tab="upgrades">UPGRADES</button>
+        </div>
+        <div id="garage-name" class="garage-name"></div>
+        <div id="garage-items" class="garage-items"></div>
+        <button id="garage-action" class="btn btn-green garage-action"></button>
       </div>
     </div>
 
@@ -64,7 +89,9 @@
       <h2 id="revive-title">CRASHED!</h2>
       <div class="revive-ask">CONTINUE?</div>
       <div id="revive-ring" class="revive-ring"><span id="revive-count"></span></div>
-      <button id="revive-btn" class="btn btn-green">CONTINUE <span class="price">FREE</span></button>
+      <button id="revive-btn" class="btn btn-green">CONTINUE <span class="price"><span class="cell-icon"></span><span id="revive-price">500</span></span></button>
+      <button id="revive-ad-btn" class="btn btn-small btn-blue">▶ WATCH AD TO CONTINUE</button>
+      <div class="best">YOU HAVE <span class="cell-icon"></span><span id="revive-cells">0</span></div>
       <button id="skip-revive-btn" class="link-btn">NO THANKS</button>
     </div>
 
@@ -78,12 +105,13 @@
           <ul class="breakdown">
             <li><span>DISTANCE</span><span id="bd-distance">0 m</span></li>
             <li><span>NEAR MISSES ×<span id="bd-near-count">0</span></span><span id="bd-near">+0</span></li>
-            <li id="bd-bonus-row"><span>×2 BONUS</span><span id="bd-bonus">+0</span></li>
+            <li id="bd-bonus-row"><span>MULTIPLIER BONUS</span><span id="bd-bonus">+0</span></li>
             <li><span><span class="cell-icon"></span>CELLS</span><span>+<span id="run-cells">0</span></span></li>
           </ul>
         </div>
         <div class="over-actions">
           <button id="retry-btn" class="btn btn-green">PLAY AGAIN</button>
+          <button id="double-btn" class="btn btn-small btn-blue">▶ WATCH AD: ×2 CELLS</button>
           <button id="home-btn" class="btn btn-small btn-dark">HOME</button>
         </div>
       </div>
@@ -106,6 +134,36 @@
         <button id="settings-close" class="btn btn-small">DONE</button>
       </div>
     </div>
+
+    <div id="missions-screen" class="screen modal off" role="dialog" aria-label="Missions">
+      <div class="panel">
+        <h2>MISSIONS</h2>
+        <div class="mult-banner">SCORE MULTIPLIER <span>×<span id="missions-mult">1</span></span></div>
+        <div class="hint">Complete all three to raise it by 1</div>
+        <ul id="missions-list" class="missions-list"></ul>
+        <button class="btn btn-small modal-close">DONE</button>
+      </div>
+    </div>
+
+    <div id="trophies-screen" class="screen modal off" role="dialog" aria-label="Trophies">
+      <div class="panel trophies">
+        <h2>TROPHIES</h2>
+        <div class="hint"><span id="trophies-count">0</span> unlocked · <span class="cell-icon"></span>250 each</div>
+        <ul id="trophies-list" class="trophies-list"></ul>
+        <button class="btn btn-small modal-close">DONE</button>
+      </div>
+    </div>
+
+    <div id="daily-screen" class="screen modal off" role="dialog" aria-label="Daily reward">
+      <div class="panel">
+        <h2>DAILY REWARD</h2>
+        <div class="hint">Come back every day for bigger rewards</div>
+        <ol id="daily-days" class="daily-days"></ol>
+        <button id="daily-claim" class="btn btn-green">CLAIM</button>
+      </div>
+    </div>
+
+    <div id="toasts" class="toasts"></div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

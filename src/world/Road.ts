@@ -14,6 +14,15 @@ export const CURB_WIDTH = 0.35;
 export const CURB_HEIGHT = 0.2;
 export const SIDEWALK_WIDTH = 3.5;
 
+/** Ground color, plus tints multiplied over the textured road, curb and sidewalk. */
+export interface RoadColors {
+  road: THREE.Color;
+  curb: THREE.Color;
+  paving: THREE.Color;
+  side: THREE.Color;
+  ground: THREE.Color;
+}
+
 /**
  * The road meshes never move; their textures scroll instead, which gives an
  * endless highway from a handful of meshes.
@@ -21,6 +30,7 @@ export const SIDEWALK_WIDTH = 3.5;
 export class Road {
   private readonly scrolling: { texture: THREE.Texture; tile: number }[] = [];
   private readonly anisotropy: number;
+  private readonly materials: Record<keyof RoadColors, THREE.MeshToonMaterial>;
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -35,6 +45,8 @@ export class Road {
     const curbMat = toon({ map: this.scrollingTexture(createCurbCanvas(), CURB_TILE, 1) });
     const pavingMat = toon({ map: this.scrollingTexture(createPavingCanvas(), PAVING_TILE, SIDEWALK_WIDTH / 2) });
     const sideMat = toon({ color: 0xb9b2a4 });
+    const groundMat = toon({ color: 0x8fd16f });
+    this.materials = { road: roadMat, curb: curbMat, paving: pavingMat, side: sideMat, ground: groundMat };
 
     for (const side of [-1, 1]) {
       const sidewalkX = side * (edge + CURB_WIDTH + SIDEWALK_WIDTH / 2);
@@ -44,7 +56,12 @@ export class Road {
       this.strip(CURB_HEIGHT, sideMat, side * (edge + CURB_WIDTH + SIDEWALK_WIDTH), CURB_HEIGHT / 2, (-side * Math.PI) / 2);
     }
 
-    this.strip(400, toon({ color: 0x8fd16f }), 0, -0.02);
+    this.strip(400, groundMat, 0, -0.02);
+  }
+
+  /** Recolors the ground and tints the road surfaces for the current environment. */
+  setColors(colors: RoadColors) {
+    for (const key of Object.keys(this.materials) as (keyof RoadColors)[]) this.materials[key].color.copy(colors[key]);
   }
 
   update(dz: number) {

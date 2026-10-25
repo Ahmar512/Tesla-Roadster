@@ -53,7 +53,14 @@ export class PropStrip {
     scene.add(this.mesh);
   }
 
+  /** Re-places every prop where it stands (e.g. after switching environment). */
+  refresh() {
+    this.slots.forEach((slot, i) => this.opts.place(slot, i, this.mesh));
+    this.update(0);
+  }
+
   update(dz: number) {
+    let visible = false;
     for (let i = 0; i < this.slots.length; i++) {
       const slot = this.slots[i];
       slot.z += dz;
@@ -64,10 +71,13 @@ export class PropStrip {
       dummy.position.set(slot.x, 0, slot.z);
       dummy.rotation.set(0, slot.rotY, 0);
       dummy.scale.copy(slot.scale);
+      if (slot.scale.x !== 0) visible = true;
       dummy.updateMatrix();
       this.mesh.setMatrixAt(i, dummy.matrix);
     }
     this.mesh.instanceMatrix.needsUpdate = true;
+    // Strips with every slot hidden (props from another environment) cost no draw call.
+    this.mesh.visible = visible;
   }
 }
 

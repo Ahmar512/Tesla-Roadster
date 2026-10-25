@@ -44,7 +44,7 @@ export class Hud {
   reset() {
     this.setScore(0);
     this.setCells(0);
-    this.setMultiplier(false);
+    this.setMultiplier(1, false);
     this.setPowerUps([]);
     this.showTutorial(null);
     this.setCountdown(0);
@@ -85,8 +85,12 @@ export class Hud {
     this.cells.textContent = String(cells);
   }
 
-  setMultiplier(on: boolean) {
-    this.multiplier.classList.toggle('hidden', !on);
+  /** The score multiplier badge, shown above ×1; `boosted` while the ×2 power-up runs. */
+  setMultiplier(value: number, boosted: boolean) {
+    const text = `×${value}`;
+    if (this.multiplier.textContent !== text) this.multiplier.textContent = text;
+    this.multiplier.classList.toggle('hidden', value <= 1);
+    this.multiplier.classList.toggle('boosted', boosted);
   }
 
   /** Bottom-left power-up icons with draining timer bars. */

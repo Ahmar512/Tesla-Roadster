@@ -10,12 +10,18 @@ import {
   MAX_SPEED,
   NITRO_SPEED_FACTOR,
   SKY_HORIZON,
-  SPEED_RAMP,
+  SPEED_TIME,
   START_SPEED,
   STUMBLE_SLOWDOWN,
 } from '../config';
+import { AudioEngine } from '../audio/AudioEngine';
+import type { Track } from '../audio/music';
 import { Police } from '../chaser/Police';
 import { Effects } from '../fx/Effects';
+import { MAX_UPGRADE, PAINTS, powerUpDuration, REVIVE_BASE_PRICE, SHIELD_WEIGHT_PER_LEVEL } from '../meta/catalog';
+import { ACHIEVEMENT_REWARD } from '../meta/achievements';
+import { Meta } from '../meta/Meta';
+import { platform } from '../services/platform';
 import { LevelGenerator } from '../level/LevelGenerator';
 import { ObstacleManager, type Hit } from '../obstacles/ObstacleManager';
 import { Pickups } from '../pickups/Pickups';
@@ -23,9 +29,12 @@ import { Player } from '../player/Player';
 import { outlineMaterial } from '../render/materials';
 import { createSky } from '../render/Sky';
 import { DebugOverlay } from '../ui/DebugOverlay';
+import { Garage } from '../ui/Garage';
 import { Hud } from '../ui/Hud';
+import { MetaPanels } from '../ui/MetaPanels';
 import { Menus, type RunResult } from '../ui/Menus';
 import { Road } from '../world/Road';
+import { Environment, ZONE_NAMES } from '../world/Environment';
 import { Scenery } from '../world/Scenery';
 import { AutoQuality, type QualityLevel } from './AutoQuality';
 import { Input } from './Input';
@@ -33,10 +42,8 @@ import { POWER_UPS, PowerUps, type PowerUpType } from './PowerUps';
 import { Settings } from './Settings';
 import { Tutorial, TUTORIAL_LENGTH } from './Tutorial';
 
-type State = 'title' | 'playing' | 'paused' | 'countdown' | 'crashed' | 'revive' | 'over';
+type State = 'title' | 'garage' | 'playing' | 'paused' | 'countdown' | 'crashed' | 'revive' | 'over';
 
-const BEST_KEY = 'roadster-rush.best';
-const CELLS_KEY = 'roadster-rush.cells';
 const CRASH_DELAY = 1.1; // seconds between the crash and the game-over screen
 const CRASH_SLOWMO = 0.2; // time scale right after impact
 const NEAR_MISS_POINTS = 50;
@@ -44,11 +51,28 @@ const FLIGHT_WARNING = 1.2; // the car blinks this long before Flight Mode ends
 const COUNTDOWN = 3; // seconds of 3-2-1 before play resumes
 const REVIVE_TIME = 5; // seconds to accept the "Continue?" offer
 const REVIVE_CLEAR = 50; // meters of road ahead cleared when reviving
+const GARAGE_SPIN = 0.35; // radians per second the garage camera circles the car
+const CAMERA_NEAR = 0.1;
+const GARAGE_NEAR = 3;
+const CARRIER_DECK = 1.5; // driving higher than this means riding a carrier
+const CELL_STREAK_GAP = 0.5; // cells collected closer together than this keep the chime climbing
+
+const MUSIC_FOR: Record<State, Track | null> = {
+  title: 'menu',
+  garage: 'menu',
+  playing: 'run',
+  paused: 'run',
+  countdown: 'run',
+  crashed: null,
+  revive: null,
+  over: 'menu',
+};
+const SIREN_STATES: State[] = ['playing', 'countdown', 'crashed', 'revive'];
 
 export class Game {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(60, 1, 0.1, 400);
+  private readonly camera = new THREE.PerspectiveCamera(60, 1, CAMERA_NEAR, 400);
   private readonly cameraBase = new THREE.Vector3(0, CAMERA_HEIGHT, CAMERA_DISTANCE);
   private readonly lookTarget = new THREE.Vector3();
   private readonly timer = new THREE.Timer();
@@ -56,6 +80,10 @@ export class Game {
 
   private readonly input = new Input();
   private readonly settings = new Settings();
+  private readonly meta = new Meta();
+  private readonly panels = new MetaPanels(this.meta);
+  private readonly garage = new Garage(this.meta);
+  private readonly audio = new AudioEngine();
   private readonly hud: Hud;
   private readonly menus: Menus;
   private readonly debug = new DebugOverlay();
@@ -65,6 +93,7 @@ export class Game {
   private readonly powerUps = new PowerUps();
   private readonly road: Road;
   private readonly scenery: Scenery;
+  private readonly environment: Environment;
   private readonly obstacles: ObstacleManager;
   private readonly pickups: Pickups;
   private readonly level: LevelGenerator;
@@ -81,11 +110,17 @@ export class Game {
   private distance = 0;
   private nearMisses = 0;
   private nearMissPoints = 0;
-  private revived = false;
+  /** Revives bought with cells this run (each costs double the last). */
+  private revives = 0;
+  private adRevived = false;
+  private adShowing = false;
+  private cellsDoubled = false;
+  private riding = false;
+  private garageAngle = 0;
+  private cellStreak = 0;
+  private cellStreakTimer = 0;
   private reviveTimer = 0;
   private countdown = 0;
-  private best = loadNumber(BEST_KEY);
-  private totalCells = loadNumber(CELLS_KEY);
   private caught = false;
   private invulnerable = 0;
   private crashTimer = 0;
@@ -103,13 +138,11 @@ export class Game {
     this.scene.background = new THREE.Color(SKY_HORIZON);
     this.scene.fog = new THREE.Fog(SKY_HORIZON, FOG_NEAR, FOG_FAR);
     this.scene.add(this.sky, this.camera);
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x9cbf86, 1.5));
-    const sun = new THREE.DirectionalLight(0xfff3df, 2.2);
-    sun.position.set(5, 12, 9); // from behind the camera, so the rears of cars are lit
-    this.scene.add(sun);
 
     this.road = new Road(this.scene, this.renderer);
     this.scenery = new Scenery(this.scene);
+    // Owns the lights, sky and fog colors, which change with the environment.
+    this.environment = new Environment(this.scene, this.sky, this.road, this.scenery);
     this.obstacles = new ObstacleManager(this.scene);
     this.pickups = new Pickups(this.scene);
     this.level = new LevelGenerator(this.obstacles, this.pickups);
@@ -121,24 +154,36 @@ export class Game {
 
     this.quality = new AutoQuality((level) => this.applyQuality(level));
     this.quality.setMode(this.settings.data.quality);
+    this.audio.setVolumes(this.settings.data.music, this.settings.data.sfx);
     this.settings.onChange = (key) => {
       if (key === 'quality') this.quality.setMode(this.settings.data.quality);
+      if (key === 'music' || key === 'sfx') this.audio.setVolumes(this.settings.data.music, this.settings.data.sfx);
     };
+    document.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('button')) this.audio.play('click');
+    });
     this.hud = new Hud(() => this.pause());
     this.menus = new Menus(this.settings, {
       play: () => this.start(),
       resume: () => this.resume(),
       home: () => this.goHome(),
       revive: () => this.revive(),
+      reviveWithAd: () => this.reviveWithAd(),
       declineRevive: () => this.gameOver(),
+      doubleCells: () => this.doubleCells(),
+      garage: () => this.openGarage(),
+      closeGarage: () => this.closeGarage(),
+      missions: () => this.panels.openMissions(),
+      trophies: () => this.panels.openTrophies(),
     });
-    this.setState('title');
-    this.menus.showTitle(this.best, this.totalCells);
+    this.wireMeta();
+    this.showTitle();
     window.addEventListener('keydown', this.onKeyDown);
 
     // Never keep running while the app is in the background.
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) this.pause();
+      this.audio.setBackground(document.hidden);
     });
     window.addEventListener('blur', () => this.pause());
 
@@ -152,19 +197,87 @@ export class Game {
     return (this.speed - START_SPEED) / (MAX_SPEED - START_SPEED);
   }
 
+  /** Score multiplier: the permanent one from missions, doubled by the ×2 power-up. */
   private get multiplier() {
-    return this.powerUps.has('multiplier') ? 2 : 1;
+    return this.meta.data.multiplier * (this.powerUps.has('multiplier') ? 2 : 1);
+  }
+
+  private wireMeta() {
+    const { meta, panels } = this;
+    meta.profile.onChange = () => panels.refreshTitle();
+    meta.onMissionDone = (text, reward) => {
+      panels.toast('🎯', 'MISSION COMPLETE', `${escapeHtml(text)} · <span class="cell-icon"></span>${reward}`);
+      this.audio.play('powerUp');
+    };
+    meta.onSetDone = (multiplier) => {
+      panels.toast('✖️', `MULTIPLIER ×${multiplier}!`, 'All missions done. New ones are waiting.');
+      this.audio.play('newBest');
+    };
+    meta.onAchievement = (def) => {
+      panels.toast(def.icon, def.name, `${escapeHtml(def.text)} · <span class="cell-icon"></span>${ACHIEVEMENT_REWARD}`);
+      this.audio.play('newBest');
+    };
+    panels.onClaim = () => this.audio.play('newBest');
+
+    this.garage.onPreview = (paint, skin) => this.player.setLook(paint, skin);
+    this.garage.onPurchase = () => {
+      this.audio.play('powerUp');
+      this.settings.haptic('success');
+    };
+    this.garage.onDenied = () => this.audio.play('beep', 1);
+    this.applyLook();
+
+    this.powerUps.durationOf = (type) => powerUpDuration(type, meta.data.upgrades[type]);
+    this.police.onEscape = () => meta.add('escapes');
+    this.environment.onZoneChange = (zone) => {
+      this.hud.popup(ZONE_NAMES[zone], true);
+      if (zone !== 'city' && this.state === 'playing') meta.add(zone);
+    };
+  }
+
+  private applyLook() {
+    const { paint, skin } = this.meta.data;
+    this.player.setLook(PAINTS.find((p) => p.id === paint)!.color, skin);
+  }
+
+  private showTitle() {
+    this.setState('title');
+    this.menus.showTitle(this.meta.data.best);
+    this.panels.refreshTitle();
+    this.panels.openDailyIfDue();
+  }
+
+  private openGarage() {
+    if (this.state !== 'title') return;
+    this.panels.closeAll();
+    this.garage.open();
+    this.garageAngle = 0;
+    this.setState('garage');
+    this.menus.show('garage');
+  }
+
+  private closeGarage() {
+    if (this.state !== 'garage') return;
+    this.garage.close();
+    this.showTitle();
   }
 
   private wireEvents() {
     this.player.events = {
-      jump: () => this.effects.thrusterBurst(this.player.x, this.player.y),
+      jump: () => {
+        this.effects.thrusterBurst(this.player.x, this.player.y);
+        this.audio.play('jump');
+        if (this.state === 'playing') this.meta.add('jumps');
+      },
       land: () => {
         this.effects.landing(this.player.x);
+        this.audio.play('land');
         this.landBump = 0.25;
       },
       laneChange: (direction) => {
         this.effects.laneChange(this.player.x, direction);
+        this.audio.play('laneChange');
+        if (this.state === 'playing') this.meta.add('laneChanges');
         this.obstacles.markNearMisses(this.player.currentLane - direction);
       },
     };
@@ -175,10 +288,15 @@ export class Game {
       this.score += points;
       this.nearMisses++;
       this.nearMissPoints += points;
+      this.meta.add('nearMisses');
       this.hud.popup(`NEAR MISS +${points}`);
+      this.audio.play('nearMiss');
     };
 
-    this.tutorial.onPrompt = (action) => this.hud.showTutorial(action);
+    this.tutorial.onPrompt = (action) => {
+      this.hud.showTutorial(action);
+      if (action) this.audio.play('prompt');
+    };
     this.tutorial.onDone = () => {
       this.hud.popup("YOU'RE READY!", true);
       this.settings.set('tutorial', false);
@@ -186,14 +304,18 @@ export class Game {
 
     this.pickups.onCell = (x, y, z) => {
       this.runCells++;
+      this.cellStreak = this.cellStreakTimer > 0 ? this.cellStreak + 1 : 0;
+      this.cellStreakTimer = CELL_STREAK_GAP;
+      this.audio.play('cell', this.cellStreak);
+      this.meta.add('cells');
       this.effects.collect(x, y, z);
       this.hud.setCells(this.runCells);
     };
     this.pickups.onPowerUp = (type, x, y) => this.activatePowerUp(type, x, y);
 
     this.powerUps.onExpire = (type) => {
+      this.audio.play('powerDown');
       if (type === 'flight') this.player.endFlight();
-      if (type === 'multiplier') this.hud.setMultiplier(false);
       if (type === 'flight' || type === 'nitro') {
         // A moment of safety to get your bearings.
         this.invulnerable = GRACE_TIME;
@@ -207,18 +329,24 @@ export class Game {
     this.powerUps.activate(type);
     this.hud.popup(info.label, true);
     this.effects.powerUp(x, y, info.color);
+    this.audio.play('powerUp');
+    this.settings.haptic('tap');
+    this.meta.add('powerUps');
 
     if (type === 'flight') {
       this.player.startFlight();
-      this.level.startFlight(this.speed * info.duration);
+      this.level.startFlight(this.speed * this.powerUps.durationOf('flight'));
+      this.meta.add('flights');
     }
+    if (type === 'magnet') this.meta.add('magnets');
     if (type === 'shield') this.player.setShield(true);
-    if (type === 'multiplier') this.hud.setMultiplier(true);
   }
 
   private setState(state: State) {
     this.state = state;
     document.body.dataset.state = state; // CSS shows the matching HUD parts
+    this.audio.setMusic(MUSIC_FOR[state]);
+    this.audio.setDucked(state === 'paused');
   }
 
   private start() {
@@ -234,13 +362,24 @@ export class Game {
     this.distance = 0;
     this.nearMisses = 0;
     this.nearMissPoints = 0;
-    this.revived = false;
+    this.revives = 0;
+    this.adRevived = false;
+    this.riding = false;
+    this.meta.startRun();
+    const { upgrades } = this.meta.data;
+    this.level.shieldBonus = upgrades.shield * SHIELD_WEIGHT_PER_LEVEL;
     this.hud.reset();
+    if (upgrades.shield >= MAX_UPGRADE) {
+      this.powerUps.activate('shield');
+      this.player.setShield(true);
+    }
+    this.panels.closeAll();
     this.menus.show(null);
     this.setState('playing');
   }
 
   private resetWorld() {
+    this.environment.reset();
     this.player.reset();
     this.police.reset();
     this.obstacles.reset();
@@ -269,6 +408,7 @@ export class Game {
 
   private startCountdown() {
     this.countdown = COUNTDOWN;
+    this.audio.play('beep', COUNTDOWN);
     this.menus.show(null);
     this.setState('countdown');
   }
@@ -278,27 +418,48 @@ export class Game {
     if (this.state === 'paused') this.saveRun();
     else if (this.state !== 'over') return;
     this.resetWorld();
-    this.setState('title');
-    this.menus.showTitle(this.best, this.totalCells);
+    this.showTitle();
   }
 
-  /** After a crash: offer one "Continue?" per run. */
+  private get revivePrice() {
+    return REVIVE_BASE_PRICE * 2 ** this.revives;
+  }
+
+  /** After a crash: "Continue?" for cells, or for an ad once per run. Straight to game over if neither is possible. */
   private offerRevive() {
+    const ad = platform.adsAvailable && !this.adRevived;
+    if (!ad && this.meta.data.cells < this.revivePrice) {
+      this.gameOver();
+      return;
+    }
     this.reviveTimer = REVIVE_TIME;
     this.setState('revive');
-    this.menus.showRevive(this.caught);
+    this.menus.showRevive({ caught: this.caught, price: this.revivePrice, cells: this.meta.data.cells, ad });
   }
 
-  // TODO(phase 6): charge cells or show a rewarded ad before reviving.
   private revive() {
-    if (this.state !== 'revive') return;
-    this.revived = true;
+    if (this.state !== 'revive' || this.adShowing || !this.meta.spend(this.revivePrice)) return;
+    this.revives++;
+    this.continueRun();
+  }
+
+  private reviveWithAd() {
+    if (this.state !== 'revive' || this.adShowing || this.adRevived) return;
+    this.adShowing = true;
+    void platform.showRewardedAd().then((watched) => {
+      this.adShowing = false;
+      if (!watched || this.state !== 'revive') return;
+      this.adRevived = true;
+      this.continueRun();
+    });
+  }
+
+  private continueRun() {
     this.obstacles.clearRange(DESPAWN_Z, -REVIVE_CLEAR);
     this.police.release();
     this.powerUps.reset();
     this.player.revive();
     this.player.setShield(false);
-    this.hud.setMultiplier(false);
     this.hud.setPowerUps([]);
     this.caught = false;
     this.timeScale = 1;
@@ -310,8 +471,15 @@ export class Game {
 
   private onKeyDown = (e: KeyboardEvent) => {
     if (e.repeat) return;
-    if (this.menus.settingsOpen) {
-      if (e.code === 'Escape') this.menus.closeSettings();
+    if (this.menus.settingsOpen || this.panels.anyOpen || this.adShowing) {
+      if (e.code === 'Escape') {
+        this.menus.closeSettings();
+        this.panels.closeAll();
+      }
+      return;
+    }
+    if (this.state === 'garage') {
+      if (e.code === 'Escape') this.closeGarage();
       return;
     }
     if (e.code === 'Enter') {
@@ -329,11 +497,15 @@ export class Game {
     if (kind === 'top') {
       this.player.bounce();
       this.effects.landing(this.player.x);
+      this.audio.play('land');
       return;
     }
     if (this.powerUps.has('nitro')) {
       this.obstacles.knock(obstacle, this.player.x);
       this.effects.smash(obstacle.x, this.player.y);
+      this.audio.play('smash');
+      this.meta.add('smashes');
+      this.settings.haptic('bump');
       this.shake = 0.15;
       return;
     }
@@ -343,6 +515,9 @@ export class Game {
       this.player.setShield(false);
       this.obstacles.knock(obstacle, this.player.x);
       this.effects.shieldBreak(this.player.x, this.player.y);
+      this.audio.play('shieldBreak');
+      this.meta.add('shieldBlocks');
+      this.settings.haptic('hit');
       this.invulnerable = GRACE_TIME;
       this.player.blink(GRACE_TIME);
       this.shake = 0.25;
@@ -359,9 +534,11 @@ export class Game {
     this.shake = 0.3;
     this.invulnerable = 0.5;
     this.effects.smash(this.player.x, this.player.y);
-    this.settings.vibrate(60);
+    this.audio.play('stumble');
+    this.settings.haptic('bump');
     if (this.police.stumble()) {
       this.caught = true;
+      this.meta.add('busts');
       this.crash();
     } else {
       this.hud.popup('WATCH OUT!');
@@ -373,11 +550,12 @@ export class Game {
     this.crashTimer = CRASH_DELAY;
     this.police.arrest();
     this.tutorial.stop();
-    this.settings.vibrate(200);
+    this.settings.haptic('crash');
     if (this.caught) {
       this.shake = 0.3;
       return;
     }
+    this.audio.play('crash');
     this.timeScale = CRASH_SLOWMO;
     this.shake = 0.6;
     this.effects.crash(this.player.x, this.player.y);
@@ -387,22 +565,22 @@ export class Game {
   private gameOver() {
     if (this.state !== 'crashed' && this.state !== 'revive') return;
     this.setState('over');
-    this.menus.showGameOver(this.saveRun());
+    const run = this.saveRun();
+    this.cellsDoubled = false;
+    this.menus.showGameOver(run, platform.adsAvailable && run.cells > 0);
+    if (run.isNewBest) {
+      this.audio.play('newBest');
+      this.settings.haptic('success');
+    }
   }
 
   /** Banks the run's cells and best score. */
   private saveRun(): RunResult {
     const score = Math.floor(this.score);
-    const isNewBest = score > this.best;
-    if (isNewBest) {
-      this.best = score;
-      saveNumber(BEST_KEY, score);
-    }
-    this.totalCells += this.runCells;
-    saveNumber(CELLS_KEY, this.totalCells);
+    const isNewBest = this.meta.endRun(score, this.runCells);
     return {
       score,
-      best: this.best,
+      best: this.meta.data.best,
       isNewBest,
       cells: this.runCells,
       distance: Math.floor(this.distance),
@@ -410,6 +588,20 @@ export class Game {
       nearMissPoints: this.nearMissPoints,
       caught: this.caught,
     };
+  }
+
+  /** Game over: watch an ad to double the cells from this run. */
+  private doubleCells() {
+    if (this.state !== 'over' || this.cellsDoubled || this.adShowing) return;
+    this.adShowing = true;
+    void platform.showRewardedAd().then((watched) => {
+      this.adShowing = false;
+      if (!watched || this.cellsDoubled) return;
+      this.cellsDoubled = true;
+      this.meta.earn(this.runCells);
+      this.menus.setDoubled(true, this.runCells * 2);
+      this.audio.play('newBest');
+    });
   }
 
   private tick = (time: number) => {
@@ -429,13 +621,17 @@ export class Game {
         this.input.consume();
         worldDt = 0;
         break;
-      case 'countdown':
+      case 'countdown': {
         this.input.consume();
         worldDt = 0;
+        const shown = Math.ceil(this.countdown);
         this.countdown -= dt;
-        this.hud.setCountdown(Math.max(0, Math.ceil(this.countdown)));
+        const count = Math.max(0, Math.ceil(this.countdown));
+        if (count !== shown) this.audio.play('beep', count);
+        this.hud.setCountdown(count);
         if (this.countdown <= 0) this.setState('playing');
         break;
+      }
       case 'crashed':
       case 'revive':
         this.input.consume();
@@ -444,11 +640,9 @@ export class Game {
         this.player.update(dt * this.timeScale, 0, this.obstacles.groundAt(this.playerBox, this.prevPlayerBox));
         if (this.state === 'crashed') {
           this.crashTimer -= dt;
-          if (this.crashTimer > 0) break;
-          if (this.revived) this.gameOver();
-          else this.offerRevive();
+          if (this.crashTimer <= 0) this.offerRevive();
         } else {
-          this.reviveTimer -= dt;
+          if (!this.adShowing) this.reviveTimer -= dt;
           this.menus.setReviveTime(this.reviveTimer / REVIVE_TIME, Math.ceil(this.reviveTimer));
           if (this.reviveTimer <= 0) this.gameOver();
         }
@@ -460,6 +654,10 @@ export class Game {
         this.advanceWorld(dz);
         this.player.update(dt, IDLE_SPEED);
         break;
+      case 'garage':
+        this.input.consume();
+        this.player.update(dt, 0);
+        break;
       case 'over':
         this.input.consume();
         break;
@@ -468,6 +666,7 @@ export class Game {
     const nitro = this.state === 'playing' && this.powerUps.has('nitro');
     const speedLines = nitro ? 1 : this.state === 'playing' ? THREE.MathUtils.clamp((this.difficulty - 0.3) / 0.5, 0, 1) : 0;
     this.police.update(worldDt, this.player.x, (x, z) => this.obstacles.surfaceAt(x, z));
+    this.updateAudio(dt, dz, nitro);
     this.effects.update(worldDt * this.timeScale, dz, speedLines, this.speed * (nitro ? NITRO_SPEED_FACTOR : 1));
     this.updateCamera(this.state === 'paused' ? 0 : dt, nitro);
     this.sky.position.copy(this.camera.position);
@@ -480,19 +679,24 @@ export class Game {
   /** One frame of gameplay; returns how far the world moved. */
   private play(dt: number) {
     const p = this.player;
-    for (const action of this.input.consume()) if (this.tutorial.allows(action)) p.handle(action);
+    for (const action of this.input.consume()) {
+      if (!this.tutorial.allows(action)) continue;
+      if (action === 'down' && p.onGround) this.meta.add('ducks');
+      p.handle(action);
+    }
 
     this.powerUps.update(dt);
     if (p.flying && this.powerUps.timeLeft('flight') < FLIGHT_WARNING) p.blink(0.1);
     this.invulnerable = Math.max(0, this.invulnerable - dt);
 
-    if (!this.tutorial.active) this.speed = Math.min(MAX_SPEED, this.speed + SPEED_RAMP * dt);
+    if (!this.tutorial.active) this.speed += (MAX_SPEED - this.speed) * (1 - Math.exp(-dt / SPEED_TIME));
     const nitro = this.powerUps.has('nitro');
     const worldSpeed = this.speed * (nitro ? NITRO_SPEED_FACTOR : 1);
     const dz = worldSpeed * dt;
     this.distance += dz;
     this.score += dz * this.multiplier;
 
+    this.environment.update(this.distance);
     this.advanceWorld(dz);
     this.tutorial.scroll(dz);
     this.level.update(dz, this.difficulty);
@@ -501,6 +705,9 @@ export class Game {
     p.getBox(this.playerBox);
     p.update(dt, worldSpeed, this.obstacles.groundAt(this.playerBox, this.prevPlayerBox));
     if (!p.onGround || nitro) this.effects.thrusterTrail(dt, p.x, p.y);
+    const riding = p.onGround && p.y > CARRIER_DECK;
+    if (riding && !this.riding) this.meta.add('carriers');
+    this.riding = riding;
 
     this.playerCenter.set(p.x, p.y + 0.6, 0);
     this.pickups.update(dt, dz, this.playerCenter, this.powerUps.has('magnet'));
@@ -511,8 +718,19 @@ export class Game {
     this.prevPlayerBox.copy(this.playerBox);
 
     this.hud.setScore(Math.floor(this.score));
+    this.hud.setMultiplier(this.multiplier, this.powerUps.has('multiplier'));
     this.hud.setPowerUps(this.powerUps.list());
+    this.meta.reach('score', Math.floor(this.score));
+    this.meta.reach('distance', Math.floor(this.distance));
     return dz;
+  }
+
+  /** The motor whine follows the car's speed; the siren plays while the police are around. */
+  private updateAudio(dt: number, dz: number, nitro: boolean) {
+    const loud = this.state === 'playing' ? 1 : this.state === 'title' ? 0.35 : 0;
+    this.audio.setMotor(loud, dt > 0 ? dz / dt : 0, nitro);
+    this.audio.setSiren(this.police.active && SIREN_STATES.includes(this.state));
+    this.cellStreakTimer -= dt;
   }
 
   private advanceWorld(dz: number) {
@@ -524,6 +742,12 @@ export class Game {
     const { damp } = THREE.MathUtils;
     const p = this.player;
     const cam = this.camera;
+
+    if (this.state === 'garage') {
+      this.orbitCar(dt);
+      return;
+    }
+    this.setNear(CAMERA_NEAR);
 
     // Follow height loosely for hops, closely when riding a carrier, and only
     // partway when flying so the road visibly drops away below.
@@ -556,6 +780,31 @@ export class Game {
     }
   }
 
+  /** Garage turntable: the camera circles the parked car. */
+  private orbitCar(dt: number) {
+    const cam = this.camera;
+    const p = this.player;
+    this.garageAngle += GARAGE_SPIN * dt;
+    const a = this.garageAngle + 0.6;
+    cam.position.set(p.x + Math.sin(a) * 7.5, 3, Math.cos(a) * 7.5);
+    // Aim off the car so it sits clear of the shop: below it in portrait (the
+    // shop is a bottom sheet), to its right in landscape (a side panel).
+    const side = cam.aspect > 1.2 ? 3 : 0;
+    this.lookTarget.set(p.x + Math.cos(a) * side, cam.aspect > 1.2 ? 0 : -1.4, -Math.sin(a) * side);
+    cam.lookAt(this.lookTarget);
+    // Circling wide takes the camera past roadside lamps and trees; clip
+    // whatever is right next to it so the car is never hidden.
+    this.setNear(GARAGE_NEAR);
+    // Leaving the garage, the chase camera eases back from here.
+    this.cameraBase.copy(cam.position);
+  }
+
+  private setNear(near: number) {
+    if (this.camera.near === near) return;
+    this.camera.near = near;
+    this.camera.updateProjectionMatrix();
+  }
+
   private applyQuality(level: QualityLevel) {
     this.maxPixelRatio = level.pixelRatio;
     outlineMaterial.visible = level.outlines;
@@ -580,18 +829,8 @@ export class Game {
   };
 }
 
-function loadNumber(key: string) {
-  try {
-    return Number(localStorage.getItem(key)) || 0;
-  } catch {
-    return 0;
-  }
-}
-
-function saveNumber(key: string, value: number) {
-  try {
-    localStorage.setItem(key, String(value));
-  } catch {
-    // Storage unavailable (private mode); progress just won't persist.
-  }
+function escapeHtml(text: string) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }

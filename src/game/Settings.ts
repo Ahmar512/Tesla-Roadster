@@ -1,7 +1,19 @@
+import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
+
+export type Haptic = 'tap' | 'bump' | 'hit' | 'crash' | 'success';
+
+const HAPTICS: Record<Haptic, () => Promise<void>> = {
+  tap: () => Haptics.impact({ style: ImpactStyle.Light }),
+  bump: () => Haptics.impact({ style: ImpactStyle.Medium }),
+  hit: () => Haptics.impact({ style: ImpactStyle.Heavy }),
+  crash: () => Haptics.vibrate({ duration: 220 }),
+  success: () => Haptics.notification({ type: NotificationType.Success }),
+};
+
 export type QualityMode = 'auto' | 'high' | 'low';
 
 export interface SettingsData {
-  /** 0..1; stored now, used once audio arrives in Phase 5. */
+  /** Volumes, 0..1. */
   music: number;
   sfx: number;
   vibration: boolean;
@@ -41,7 +53,9 @@ export class Settings {
     this.onChange?.(key);
   }
 
-  vibrate(ms: number) {
-    if (this.data.vibration) navigator.vibrate?.(ms);
+  /** Haptic feedback, if vibration is on. Native haptics on Android, `navigator.vibrate` on the web. */
+  haptic(kind: Haptic) {
+    if (!this.data.vibration) return;
+    HAPTICS[kind]().catch(() => {}); // no vibration support: just skip it
   }
 }

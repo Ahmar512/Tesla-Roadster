@@ -20,11 +20,13 @@ export const POWER_UPS: Record<PowerUpType, PowerUpInfo> = {
 
 export const POWER_UP_TYPES = Object.keys(POWER_UPS) as PowerUpType[];
 
-export function randomPowerUp(): PowerUpType {
-  const total = POWER_UP_TYPES.reduce((sum, t) => sum + POWER_UPS[t].weight, 0);
+/** `shieldBonus` adds to the shield's weight (from its upgrade). */
+export function randomPowerUp(shieldBonus = 0): PowerUpType {
+  const weight = (t: PowerUpType) => POWER_UPS[t].weight + (t === 'shield' ? shieldBonus : 0);
+  const total = POWER_UP_TYPES.reduce((sum, t) => sum + weight(t), 0);
   let r = Math.random() * total;
   for (const type of POWER_UP_TYPES) {
-    r -= POWER_UPS[type].weight;
+    r -= weight(type);
     if (r <= 0) return type;
   }
   return 'magnet';
@@ -34,6 +36,8 @@ export function randomPowerUp(): PowerUpType {
 export class PowerUps {
   /** Fires when a timed power-up runs out. */
   onExpire?: (type: PowerUpType) => void;
+  /** Seconds a power-up lasts; set from the player's upgrades. 0 = until used. */
+  durationOf: (type: PowerUpType) => number = (type) => POWER_UPS[type].duration;
   private readonly remaining = new Map<PowerUpType, number>();
 
   reset() {
@@ -42,7 +46,7 @@ export class PowerUps {
 
   /** Starts a power-up, or refills it if it's already running. */
   activate(type: PowerUpType) {
-    this.remaining.set(type, POWER_UPS[type].duration || Infinity);
+    this.remaining.set(type, this.durationOf(type) || Infinity);
   }
 
   /** Uses up a power-up early (the shield absorbing a hit). */
@@ -74,7 +78,7 @@ export class PowerUps {
   list(): { type: PowerUpType; fraction: number }[] {
     return [...this.remaining].map(([type, left]) => ({
       type,
-      fraction: left === Infinity ? 1 : left / POWER_UPS[type].duration,
+      fraction: left === Infinity ? 1 : left / this.durationOf(type),
     }));
   }
 }

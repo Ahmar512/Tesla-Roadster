@@ -118,3 +118,105 @@ export function wheelParts(radius: number, width: number, at: [number, number, n
     { geometry: new THREE.BoxGeometry(width + 0.04, radius * 1.1, radius * 0.22), color: 0x5b616b, at },
   ];
 }
+
+/** One cross-section of a lofted body, at a point along its length. */
+export interface LoftSection {
+  z: number;
+  /** Half the width at the widest point of the section. */
+  halfWidth: number;
+  bottom: number;
+  top: number;
+  /** Width at the very top as a fraction of the full width (tumblehome). Default 1. */
+  topWidth?: number;
+}
+
+/**
+ * Builds a smooth body by sweeping rounded cross-sections along z (sections
+ * must be sorted by z). Unlike extrudeSide, the width can change along the
+ * length: narrow noses, wide haunches. Ends are closed with flat caps.
+ * `roundness` is the superellipse exponent: 2 is an ellipse, higher is boxier.
+ */
+export function loft(sections: LoftSection[], segments = 20, roundness = 3.5, steps = 4) {
+  const rings = smoothSections(sections, steps);
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const e = 2 / roundness;
+  const shaped = (v: number) => Math.sign(v) * Math.abs(v) ** e;
+
+  const ringPoints = (s: LoftSection) => {
+    const points: [number, number, number][] = [];
+    const yc = (s.bottom + s.top) / 2;
+    const hh = (s.top - s.bottom) / 2;
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * Math.PI * 2;
+      const sin = Math.sin(a);
+      const taper = sin > 0 ? 1 + ((s.topWidth ?? 1) - 1) * sin : 1;
+      points.push([s.halfWidth * shaped(Math.cos(a)) * taper, yc + hh * shaped(sin), s.z]);
+    }
+    return points;
+  };
+
+  // Sides: quads between consecutive rings, wound to face outward.
+  for (const ring of rings) for (const p of ringPoints(ring)) positions.push(...p);
+  for (let k = 0; k < rings.length - 1; k++) {
+    for (let i = 0; i < segments; i++) {
+      const a = k * segments + i;
+      const b = k * segments + ((i + 1) % segments);
+      const c = a + segments;
+      const d = b + segments;
+      indices.push(a, b, c, b, d, c);
+    }
+  }
+
+  // Flat caps get their own vertices so their normals don't smear the sides.
+  const cap = (ring: LoftSection, facingBack: boolean) => {
+    const start = positions.length / 3;
+    const points = ringPoints(ring);
+    for (const p of points) positions.push(...p);
+    positions.push(0, (ring.bottom + ring.top) / 2, ring.z);
+    const center = start + segments;
+    for (let i = 0; i < segments; i++) {
+      const a = start + i;
+      const b = start + ((i + 1) % segments);
+      if (facingBack) indices.push(center, a, b);
+      else indices.push(center, b, a);
+    }
+  };
+  cap(rings[0], false);
+  cap(rings[rings.length - 1], true);
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+/** Adds `steps - 1` Catmull-Rom interpolated sections between each pair, for smooth curves along z. */
+function smoothSections(sections: LoftSection[], steps: number): LoftSection[] {
+  const keys = ['z', 'halfWidth', 'bottom', 'top', 'topWidth'] as const;
+  const value = (s: LoftSection, k: (typeof keys)[number]) => (k === 'topWidth' ? (s.topWidth ?? 1) : s[k]);
+  const out: LoftSection[] = [];
+  for (let i = 0; i < sections.length - 1; i++) {
+    const p0 = sections[Math.max(0, i - 1)];
+    const p1 = sections[i];
+    const p2 = sections[i + 1];
+    const p3 = sections[Math.min(sections.length - 1, i + 2)];
+    for (let j = 0; j < steps; j++) {
+      const t = j / steps;
+      const s = {} as LoftSection;
+      for (const k of keys) {
+        s[k] = catmullRom(value(p0, k), value(p1, k), value(p2, k), value(p3, k), t);
+      }
+      out.push(s);
+    }
+  }
+  out.push(sections[sections.length - 1]);
+  return out;
+}
+
+function catmullRom(p0: number, p1: number, p2: number, p3: number, t: number) {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
+}

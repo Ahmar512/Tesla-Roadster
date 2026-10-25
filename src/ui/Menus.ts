@@ -2,14 +2,27 @@ import type { QualityMode, Settings } from '../game/Settings';
 
 const byId = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
-export type Screen = 'title' | 'pause' | 'revive' | 'over';
+export type Screen = 'title' | 'garage' | 'pause' | 'revive' | 'over';
 
 export interface MenuActions {
   play(): void;
   resume(): void;
   home(): void;
   revive(): void;
+  reviveWithAd(): void;
   declineRevive(): void;
+  doubleCells(): void;
+  garage(): void;
+  closeGarage(): void;
+  missions(): void;
+  trophies(): void;
+}
+
+export interface ReviveOffer {
+  caught: boolean;
+  price: number;
+  cells: number;
+  ad: boolean;
 }
 
 export interface RunResult {
@@ -34,6 +47,7 @@ export class Menus {
     pause: byId('pause-screen'),
     revive: byId('revive-screen'),
     over: byId('over-screen'),
+    garage: byId('garage-screen'),
   };
   private readonly settingsScreen = byId('settings-screen');
   private readonly reviveRing = byId('revive-ring');
@@ -54,7 +68,13 @@ export class Menus {
     onClick('quit-btn', actions.home);
     onClick('home-btn', actions.home);
     onClick('revive-btn', actions.revive);
+    onClick('revive-ad-btn', actions.reviveWithAd);
     onClick('skip-revive-btn', actions.declineRevive);
+    onClick('double-btn', actions.doubleCells);
+    onClick('garage-btn', actions.garage);
+    onClick('garage-back', actions.closeGarage);
+    onClick('missions-btn', actions.missions);
+    onClick('trophies-btn', actions.trophies);
     onClick('settings-btn', () => this.openSettings());
     onClick('pause-settings-btn', () => this.openSettings());
     onClick('settings-close', () => this.closeSettings());
@@ -75,14 +95,18 @@ export class Menus {
     if (screen !== 'over') this.confetti.replaceChildren();
   }
 
-  showTitle(best: number, totalCells: number) {
-    byId('title-best').textContent = String(best);
-    byId('title-cells').textContent = String(totalCells);
+  showTitle(best: number) {
+    byId('title-best').textContent = best.toLocaleString('en-US');
     this.show('title');
   }
 
-  showRevive(caught: boolean) {
-    byId('revive-title').textContent = caught ? 'BUSTED!' : 'CRASHED!';
+  /** "Continue?": pay cells (if the player has enough) or watch an ad (once per run). */
+  showRevive(offer: ReviveOffer) {
+    byId('revive-title').textContent = offer.caught ? 'BUSTED!' : 'CRASHED!';
+    byId('revive-price').textContent = offer.price.toLocaleString('en-US');
+    byId('revive-cells').textContent = offer.cells.toLocaleString('en-US');
+    byId<HTMLButtonElement>('revive-btn').disabled = offer.cells < offer.price;
+    byId('revive-ad-btn').classList.toggle('hidden', !offer.ad);
     this.setReviveTime(1, 0);
     this.show('revive');
   }
@@ -94,7 +118,9 @@ export class Menus {
     if (this.reviveCount.textContent !== text) this.reviveCount.textContent = text;
   }
 
-  showGameOver(run: RunResult) {
+  /** `canDouble`: offer a rewarded ad that doubles the run's cells. */
+  showGameOver(run: RunResult, canDouble: boolean) {
+    this.setDoubled(!canDouble, run.cells);
     byId('over-title').textContent = run.caught ? 'BUSTED!' : 'CRASHED!';
     byId('over-best').textContent = String(run.best);
     byId('bd-distance').textContent = `${run.distance} m`;
@@ -109,6 +135,12 @@ export class Menus {
     this.countUpScore(run.score);
     if (run.isNewBest) this.burstConfetti();
     this.show('over');
+  }
+
+  /** Hides the ×2 cells offer; after watching the ad, shows the doubled count. */
+  setDoubled(hide: boolean, cells: number) {
+    byId('double-btn').classList.toggle('hidden', hide);
+    byId('run-cells').textContent = String(cells);
   }
 
   openSettings() {
@@ -156,7 +188,7 @@ export class Menus {
     for (const key of ['vibration', 'tutorial'] as const) {
       byId(`set-${key}`).addEventListener('click', () => {
         this.settings.set(key, !this.settings.data[key]);
-        if (key === 'vibration') this.settings.vibrate(40);
+        if (key === 'vibration') this.settings.haptic('tap');
         this.syncSettings();
       });
     }

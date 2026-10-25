@@ -8,7 +8,9 @@ export const ROAD_WIDTH = LANE_WIDTH * 3 + 1.6;
 export const IDLE_SPEED = 8;
 export const START_SPEED = 18;
 export const MAX_SPEED = 42;
-export const SPEED_RAMP = 0.3; // speed gained per second of play
+// Speed eases toward MAX_SPEED: quick gains early, a long plateau later.
+// Reaches ~30 m/s after 1 minute, ~36 after 2, ~39 after 3.
+export const SPEED_TIME = 90; // seconds
 
 // Player
 export const PLAYER = { width: 1.5, height: 1.1, duckHeight: 0.6, length: 3.6 };
@@ -49,3 +51,7 @@ export const FOG_FAR = 170;
 export const CURVE_STRENGTH = 0.0018; // how strongly the world bends away
 export const OUTLINE_WIDTH = 0.035;
 export const PLAYER_COLOR = 0xe3202e;
+
+// Environments: city → desert highway → Mars, repeating
+export const ZONE_LENGTH = 1200; // meters driven in each environment
+export const ZONE_TRANSITION = 150; // meters over which sky, ground and props change over

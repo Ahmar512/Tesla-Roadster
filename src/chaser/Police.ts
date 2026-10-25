@@ -21,6 +21,8 @@ const DIM = new THREE.Color(0x202028);
  */
 export class Police {
   readonly object: THREE.Group;
+  /** The chase ran out without a second stumble. */
+  onEscape?: () => void;
   private readonly red: THREE.MeshBasicMaterial;
   private readonly blue: THREE.MeshBasicMaterial;
   private state: State = 'away';
@@ -39,6 +41,11 @@ export class Police {
 
   get chasing() {
     return this.state === 'chasing';
+  }
+
+  /** Chasing or making an arrest: lights and siren on. */
+  get active() {
+    return this.state !== 'away';
   }
 
   reset() {
@@ -69,7 +76,10 @@ export class Police {
     this.time += dt;
     if (this.state === 'chasing') {
       this.chaseTimer -= dt;
-      if (this.chaseTimer <= 0) this.state = 'away';
+      if (this.chaseTimer <= 0) {
+        this.state = 'away';
+        this.onEscape?.();
+      }
     }
 
     const targetZ = { away: AWAY_Z, chasing: CHASING_Z, caught: CAUGHT_Z }[this.state];
