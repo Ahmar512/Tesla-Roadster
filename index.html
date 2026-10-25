@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#3f9ef5" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚀</text></svg>"
+    />
+    <title>Roadster Rush</title>
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <div id="hud" class="hidden">
+      <div class="score-label">SCORE <span id="multiplier" class="multiplier hidden">×2</span></div>
+      <div id="score">0</div>
+      <div class="cells"><span class="cell-icon">⚡</span><span id="cells">0</span></div>
+    </div>
+    <div id="powerups" class="hidden"></div>
+    <div id="popups"></div>
+
+    <div id="title-screen" class="screen">
+      <h1 class="logo">ROADSTER<span>RUSH</span></h1>
+      <ul class="howto">
+        <li>Swipe ⬅ ➡ to change lane</li>
+        <li>Swipe ⬆ to thruster-hop</li>
+        <li>Swipe ⬇ to duck</li>
+      </ul>
+      <button id="play-btn" class="btn">PLAY</button>
+      <div class="best">BEST: <span id="title-best">0</span> · <span class="cell-icon">⚡</span><span id="title-cells">0</span></div>
+    </div>
+
+    <div id="over-screen" class="screen off">
+      <h2 id="over-title">CRASHED!</h2>
+      <div id="final-score" class="final-score">0</div>
+      <div class="run-cells"><span class="cell-icon">⚡</span> +<span id="run-cells">0</span></div>
+      <div id="new-best" class="new-best hidden">NEW BEST!</div>
+      <div class="best">BEST: <span id="over-best">0</span></div>
+      <button id="retry-btn" class="btn">PLAY AGAIN</button>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
