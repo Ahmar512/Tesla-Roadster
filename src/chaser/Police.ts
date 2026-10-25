@@ -68,13 +68,15 @@ export class Police {
     }
 
     const targetZ = { away: AWAY_Z, chasing: CHASING_Z, caught: CAUGHT_Z }[this.state];
+    // Pull over on the side with more road (toward the middle).
+    const targetX = this.state === 'caught' ? playerX + (playerX > 0 ? -CAUGHT_SIDE : CAUGHT_SIDE) : playerX;
     this.z = THREE.MathUtils.damp(this.z, targetZ, this.state === 'away' ? 1.2 : 2.5, dt);
-    this.x = THREE.MathUtils.damp(this.x, playerX, 3, dt);
+    this.x = THREE.MathUtils.damp(this.x, targetX, 3, dt);
     this.object.visible = this.z < AWAY_Z - 2;
     if (!this.object.visible) return;
 
     this.object.position.set(this.x, surfaceAt(this.x, this.z), this.z);
-    this.object.rotation.y = (playerX - this.x) * -0.08;
+    this.object.rotation.y = (targetX - this.x) * -0.12;
 
     const flash = Math.floor(this.time * 7) % 2 === 0;
     this.red.color.copy(flash ? RED : DIM);
