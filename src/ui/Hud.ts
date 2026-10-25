@@ -1,3 +1,4 @@
+import type { Action } from '../game/Input';
 import { POWER_UPS, type PowerUpType } from '../game/PowerUps';
 
 const byId = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -5,60 +6,68 @@ const byId = <T extends HTMLElement = HTMLElement>(id: string) => document.getEl
 const POP_EVERY = 100; // the score bounces each time it passes a multiple of this
 const ENDING_SOON = 0.2; // power-up icons blink in their last 20%
 
-/** DOM overlay: score, cells, power-up timers, popups, title and game-over screens. */
+const TUTORIAL_TEXT: Record<Action, { arrow: string; text: string; key: string }> = {
+  left: { arrow: '⬅', text: 'SWIPE LEFT', key: '←' },
+  right: { arrow: '➡', text: 'SWIPE RIGHT', key: '→' },
+  up: { arrow: '⬆', text: 'SWIPE UP TO HOP', key: '↑' },
+  down: { arrow: '⬇', text: 'SWIPE DOWN TO DUCK', key: '↓' },
+};
+
+/**
+ * In-game DOM overlay: score, cells, power-up timers, popups, the pause
+ * button, the 3-2-1 countdown and tutorial prompts. Which parts show is
+ * driven by CSS from `body[data-state]`.
+ */
 export class Hud {
-  private readonly hud = byId('hud');
   private readonly score = byId('score');
   private readonly cells = byId('cells');
   private readonly multiplier = byId('multiplier');
   private readonly powerups = byId('powerups');
   private readonly popups = byId('popups');
-  private readonly titleScreen = byId('title-screen');
-  private readonly titleBest = byId('title-best');
-  private readonly titleCells = byId('title-cells');
-  private readonly overScreen = byId('over-screen');
-  private readonly overTitle = byId('over-title');
-  private readonly finalScore = byId('final-score');
-  private readonly runCells = byId('run-cells');
-  private readonly overBest = byId('over-best');
-  private readonly newBest = byId('new-best');
+  private readonly countdown = byId('countdown');
+  private readonly tutorial = byId('tutorial-prompt');
   private readonly timers = new Map<PowerUpType, { row: HTMLElement; fill: HTMLElement }>();
+  private readonly showKeys = matchMedia('(hover: hover) and (pointer: fine)').matches;
   private shownScore = -1;
   private shownCells = -1;
+  private shownCount = 0;
 
-  constructor(onPlay: () => void) {
-    byId('play-btn').addEventListener('click', onPlay);
-    byId('retry-btn').addEventListener('click', onPlay);
+  constructor(onPause: () => void) {
+    const pause = byId('pause-btn');
+    pause.addEventListener('click', () => {
+      pause.blur();
+      onPause();
+    });
   }
 
-  showTitle(best: number, totalCells: number) {
-    this.titleBest.textContent = String(best);
-    this.titleCells.textContent = String(totalCells);
-    this.titleScreen.classList.remove('off');
-    this.overScreen.classList.add('off');
-    this.hud.classList.add('hidden');
-    this.powerups.classList.add('hidden');
-  }
-
-  showPlaying() {
-    this.titleScreen.classList.add('off');
-    this.overScreen.classList.add('off');
-    this.hud.classList.remove('hidden');
-    this.powerups.classList.remove('hidden');
+  /** Clears everything for a fresh run. */
+  reset() {
     this.setScore(0);
     this.setCells(0);
     this.setMultiplier(false);
     this.setPowerUps([]);
+    this.showTutorial(null);
+    this.setCountdown(0);
   }
 
-  showGameOver(score: number, best: number, isNewBest: boolean, cells: number, caught: boolean) {
-    this.overTitle.textContent = caught ? 'BUSTED!' : 'CRASHED!';
-    this.finalScore.textContent = String(score);
-    this.runCells.textContent = String(cells);
-    this.overBest.textContent = String(best);
-    this.newBest.classList.toggle('hidden', !isNewBest);
-    this.overScreen.classList.remove('off');
-    this.powerups.classList.add('hidden');
+  /** Shows a big 3-2-1 number; 0 hides it. */
+  setCountdown(n: number) {
+    if (n === this.shownCount) return;
+    this.shownCount = n;
+    this.countdown.textContent = n > 0 ? String(n) : '';
+    this.countdown.classList.toggle('hidden', n <= 0);
+    if (n > 0) restartAnimation(this.countdown, 'tick');
+  }
+
+  /** Tutorial prompt for the move to make, or null to hide it. */
+  showTutorial(action: Action | null) {
+    this.tutorial.classList.toggle('hidden', !action);
+    if (!action) return;
+    const t = TUTORIAL_TEXT[action];
+    this.tutorial.dataset.action = action;
+    byId('tutorial-arrow').textContent = t.arrow;
+    byId('tutorial-text').textContent = t.text;
+    byId('tutorial-key').textContent = this.showKeys ? `or press ${t.key}` : '';
   }
 
   setScore(score: number) {
@@ -132,7 +141,7 @@ function createTimer(type: PowerUpType) {
   return { row, fill };
 }
 
-function restartAnimation(el: HTMLElement, className: string) {
+export function restartAnimation(el: HTMLElement, className: string) {
   el.classList.remove(className);
   void el.offsetWidth;
   el.classList.add(className);

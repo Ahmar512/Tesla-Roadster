@@ -125,6 +125,16 @@ export class Player {
     this.duckTimer = 0;
   }
 
+  /** Back on the road in the current lane after a crash (revive). */
+  revive() {
+    this.prevLane = this.lane;
+    this.x = LANES[this.lane];
+    this.y = this.ground = 0;
+    this.vy = 0;
+    this.duckTimer = 0;
+    this.flying = false;
+  }
+
   /** Clipped something while changing lane: bounce back where we came from. */
   stumble() {
     this.lane = this.prevLane;

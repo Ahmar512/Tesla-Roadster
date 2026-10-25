@@ -44,8 +44,9 @@ export class LevelGenerator {
     this.reset();
   }
 
-  reset() {
-    this.nextZ = FIRST_CHUNK_Z;
+  /** `startZ` leaves the road before it empty (e.g. for the tutorial). */
+  reset(startZ = FIRST_CHUNK_Z) {
+    this.nextZ = startZ;
     this.lastPattern = undefined;
     this.untilPowerUp = THREE.MathUtils.randFloat(...POWER_UP_EVERY) * 0.5;
     this.reserved = [];

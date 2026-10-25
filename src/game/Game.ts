@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {
   CAMERA_DISTANCE,
   CAMERA_HEIGHT,
+  DESPAWN_Z,
   FOG_FAR,
   FOG_NEAR,
   GRACE_TIME,
@@ -23,13 +24,16 @@ import { outlineMaterial } from '../render/materials';
 import { createSky } from '../render/Sky';
 import { DebugOverlay } from '../ui/DebugOverlay';
 import { Hud } from '../ui/Hud';
+import { Menus, type RunResult } from '../ui/Menus';
 import { Road } from '../world/Road';
 import { Scenery } from '../world/Scenery';
 import { AutoQuality, type QualityLevel } from './AutoQuality';
 import { Input } from './Input';
 import { POWER_UPS, PowerUps, type PowerUpType } from './PowerUps';
+import { Settings } from './Settings';
+import { Tutorial, TUTORIAL_LENGTH } from './Tutorial';
 
-type State = 'title' | 'playing' | 'crashed' | 'over';
+type State = 'title' | 'playing' | 'paused' | 'countdown' | 'crashed' | 'revive' | 'over';
 
 const BEST_KEY = 'roadster-rush.best';
 const CELLS_KEY = 'roadster-rush.cells';
@@ -37,6 +41,9 @@ const CRASH_DELAY = 1.1; // seconds between the crash and the game-over screen
 const CRASH_SLOWMO = 0.2; // time scale right after impact
 const NEAR_MISS_POINTS = 50;
 const FLIGHT_WARNING = 1.2; // the car blinks this long before Flight Mode ends
+const COUNTDOWN = 3; // seconds of 3-2-1 before play resumes
+const REVIVE_TIME = 5; // seconds to accept the "Continue?" offer
+const REVIVE_CLEAR = 50; // meters of road ahead cleared when reviving
 
 export class Game {
   private readonly renderer: THREE.WebGLRenderer;
@@ -48,7 +55,9 @@ export class Game {
   private readonly sky = createSky();
 
   private readonly input = new Input();
+  private readonly settings = new Settings();
   private readonly hud: Hud;
+  private readonly menus: Menus;
   private readonly debug = new DebugOverlay();
   private readonly quality: AutoQuality;
   private readonly player = new Player();
@@ -59,6 +68,7 @@ export class Game {
   private readonly obstacles: ObstacleManager;
   private readonly pickups: Pickups;
   private readonly level: LevelGenerator;
+  private readonly tutorial: Tutorial;
   private readonly effects: Effects;
   private readonly playerBox = new THREE.Box3();
   private readonly prevPlayerBox = new THREE.Box3();
@@ -68,6 +78,12 @@ export class Game {
   private speed = IDLE_SPEED;
   private score = 0;
   private runCells = 0;
+  private distance = 0;
+  private nearMisses = 0;
+  private nearMissPoints = 0;
+  private revived = false;
+  private reviveTimer = 0;
+  private countdown = 0;
   private best = loadNumber(BEST_KEY);
   private totalCells = loadNumber(CELLS_KEY);
   private caught = false;
@@ -97,17 +113,34 @@ export class Game {
     this.obstacles = new ObstacleManager(this.scene);
     this.pickups = new Pickups(this.scene);
     this.level = new LevelGenerator(this.obstacles, this.pickups);
+    this.tutorial = new Tutorial(this.obstacles, this.pickups);
     this.effects = new Effects(this.scene, this.camera);
     this.scene.add(this.player.object, this.police.object);
     this.player.reset();
     this.wireEvents();
 
     this.quality = new AutoQuality((level) => this.applyQuality(level));
-    this.hud = new Hud(() => this.start());
-    this.hud.showTitle(this.best, this.totalCells);
-    window.addEventListener('keydown', (e) => {
-      if (e.code === 'Enter' && (this.state === 'title' || this.state === 'over')) this.start();
+    this.quality.setMode(this.settings.data.quality);
+    this.settings.onChange = (key) => {
+      if (key === 'quality') this.quality.setMode(this.settings.data.quality);
+    };
+    this.hud = new Hud(() => this.pause());
+    this.menus = new Menus(this.settings, {
+      play: () => this.start(),
+      resume: () => this.resume(),
+      home: () => this.goHome(),
+      revive: () => this.revive(),
+      declineRevive: () => this.gameOver(),
     });
+    this.setState('title');
+    this.menus.showTitle(this.best, this.totalCells);
+    window.addEventListener('keydown', this.onKeyDown);
+
+    // Never keep running while the app is in the background.
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this.pause();
+    });
+    window.addEventListener('blur', () => this.pause());
 
     window.addEventListener('resize', this.resize);
     this.resize();
@@ -138,8 +171,17 @@ export class Game {
 
     this.obstacles.onNearMiss = () => {
       if (this.state !== 'playing') return;
-      this.score += NEAR_MISS_POINTS * this.multiplier;
-      this.hud.popup(`NEAR MISS +${NEAR_MISS_POINTS * this.multiplier}`);
+      const points = NEAR_MISS_POINTS * this.multiplier;
+      this.score += points;
+      this.nearMisses++;
+      this.nearMissPoints += points;
+      this.hud.popup(`NEAR MISS +${points}`);
+    };
+
+    this.tutorial.onPrompt = (action) => this.hud.showTutorial(action);
+    this.tutorial.onDone = () => {
+      this.hud.popup("YOU'RE READY!", true);
+      this.settings.set('tutorial', false);
     };
 
     this.pickups.onCell = (x, y, z) => {
@@ -174,25 +216,114 @@ export class Game {
     if (type === 'multiplier') this.hud.setMultiplier(true);
   }
 
+  private setState(state: State) {
+    this.state = state;
+    document.body.dataset.state = state; // CSS shows the matching HUD parts
+  }
+
   private start() {
+    if (this.state !== 'title' && this.state !== 'over') return;
+    this.resetWorld();
+    if (this.settings.data.tutorial) {
+      this.tutorial.start();
+      this.level.reset(-TUTORIAL_LENGTH);
+    }
+    this.speed = START_SPEED;
+    this.score = 0;
+    this.runCells = 0;
+    this.distance = 0;
+    this.nearMisses = 0;
+    this.nearMissPoints = 0;
+    this.revived = false;
+    this.hud.reset();
+    this.menus.show(null);
+    this.setState('playing');
+  }
+
+  private resetWorld() {
     this.player.reset();
     this.police.reset();
     this.obstacles.reset();
     this.pickups.reset();
     this.level.reset();
+    this.tutorial.stop();
     this.powerUps.reset();
     this.input.consume();
-    this.speed = START_SPEED;
-    this.score = 0;
-    this.runCells = 0;
+    this.speed = IDLE_SPEED;
     this.caught = false;
     this.invulnerable = 0;
     this.timeScale = 1;
-    this.crashZoom = 0;
     this.player.getBox(this.prevPlayerBox);
-    this.state = 'playing';
-    this.hud.showPlaying();
   }
+
+  private pause() {
+    if (this.state !== 'playing' && this.state !== 'countdown') return;
+    this.setState('paused');
+    this.menus.show('pause');
+  }
+
+  /** Back to the run after a 3-2-1 countdown. */
+  private resume() {
+    if (this.state === 'paused') this.startCountdown();
+  }
+
+  private startCountdown() {
+    this.countdown = COUNTDOWN;
+    this.menus.show(null);
+    this.setState('countdown');
+  }
+
+  /** Quit to the title screen; a run in progress still banks its cells and score. */
+  private goHome() {
+    if (this.state === 'paused') this.saveRun();
+    else if (this.state !== 'over') return;
+    this.resetWorld();
+    this.setState('title');
+    this.menus.showTitle(this.best, this.totalCells);
+  }
+
+  /** After a crash: offer one "Continue?" per run. */
+  private offerRevive() {
+    this.reviveTimer = REVIVE_TIME;
+    this.setState('revive');
+    this.menus.showRevive(this.caught);
+  }
+
+  // TODO(phase 6): charge cells or show a rewarded ad before reviving.
+  private revive() {
+    if (this.state !== 'revive') return;
+    this.revived = true;
+    this.obstacles.clearRange(DESPAWN_Z, -REVIVE_CLEAR);
+    this.police.release();
+    this.powerUps.reset();
+    this.player.revive();
+    this.player.setShield(false);
+    this.hud.setMultiplier(false);
+    this.hud.setPowerUps([]);
+    this.caught = false;
+    this.timeScale = 1;
+    this.invulnerable = GRACE_TIME;
+    this.player.blink(GRACE_TIME);
+    this.player.getBox(this.prevPlayerBox);
+    this.startCountdown();
+  }
+
+  private onKeyDown = (e: KeyboardEvent) => {
+    if (e.repeat) return;
+    if (this.menus.settingsOpen) {
+      if (e.code === 'Escape') this.menus.closeSettings();
+      return;
+    }
+    if (e.code === 'Enter') {
+      if (this.state === 'title' || this.state === 'over') this.start();
+      else if (this.state === 'paused') this.resume();
+      else if (this.state === 'revive') this.revive();
+    } else if (e.code === 'Escape' || e.code === 'KeyP') {
+      if (this.state === 'playing' || this.state === 'countdown') this.pause();
+      else if (this.state === 'paused') this.resume();
+      else if (this.state === 'revive') this.gameOver();
+    }
+  };
 
   private handleHit({ obstacle, kind }: Hit) {
     if (kind === 'top') {
@@ -228,7 +359,7 @@ export class Game {
     this.shake = 0.3;
     this.invulnerable = 0.5;
     this.effects.smash(this.player.x, this.player.y);
-    navigator.vibrate?.(60);
+    this.settings.vibrate(60);
     if (this.police.stumble()) {
       this.caught = true;
       this.crash();
@@ -238,10 +369,11 @@ export class Game {
   }
 
   private crash() {
-    this.state = 'crashed';
+    this.setState('crashed');
     this.crashTimer = CRASH_DELAY;
     this.police.arrest();
-    navigator.vibrate?.(200);
+    this.tutorial.stop();
+    this.settings.vibrate(200);
     if (this.caught) {
       this.shake = 0.3;
       return;
@@ -253,7 +385,13 @@ export class Game {
   }
 
   private gameOver() {
-    this.state = 'over';
+    if (this.state !== 'crashed' && this.state !== 'revive') return;
+    this.setState('over');
+    this.menus.showGameOver(this.saveRun());
+  }
+
+  /** Banks the run's cells and best score. */
+  private saveRun(): RunResult {
     const score = Math.floor(this.score);
     const isNewBest = score > this.best;
     if (isNewBest) {
@@ -262,7 +400,16 @@ export class Game {
     }
     this.totalCells += this.runCells;
     saveNumber(CELLS_KEY, this.totalCells);
-    this.hud.showGameOver(score, this.best, isNewBest, this.runCells, this.caught);
+    return {
+      score,
+      best: this.best,
+      isNewBest,
+      cells: this.runCells,
+      distance: Math.floor(this.distance),
+      nearMisses: this.nearMisses,
+      nearMissPoints: this.nearMissPoints,
+      caught: this.caught,
+    };
   }
 
   private tick = (time: number) => {
@@ -270,17 +417,41 @@ export class Game {
     const rawDt = this.timer.getDelta();
     const dt = Math.min(rawDt, 1 / 20);
     let dz = 0;
+    let worldDt = dt; // frame time for effects and the police car; 0 while frozen
 
     switch (this.state) {
       case 'playing':
-        dz = this.play(dt);
+        // The tutorial eases time to a stop while it waits for a swipe.
+        worldDt = dt * this.tutorial.update(dt);
+        dz = this.play(worldDt);
+        break;
+      case 'paused':
+        this.input.consume();
+        worldDt = 0;
+        break;
+      case 'countdown':
+        this.input.consume();
+        worldDt = 0;
+        this.countdown -= dt;
+        this.hud.setCountdown(Math.max(0, Math.ceil(this.countdown)));
+        if (this.countdown <= 0) this.setState('playing');
         break;
       case 'crashed':
+      case 'revive':
+        this.input.consume();
         // Brief slow motion that eases back to normal speed.
         this.timeScale = THREE.MathUtils.damp(this.timeScale, 1, 3, dt);
-        this.crashTimer -= dt;
         this.player.update(dt * this.timeScale, 0, this.obstacles.groundAt(this.playerBox, this.prevPlayerBox));
-        if (this.crashTimer <= 0) this.gameOver();
+        if (this.state === 'crashed') {
+          this.crashTimer -= dt;
+          if (this.crashTimer > 0) break;
+          if (this.revived) this.gameOver();
+          else this.offerRevive();
+        } else {
+          this.reviveTimer -= dt;
+          this.menus.setReviveTime(this.reviveTimer / REVIVE_TIME, Math.ceil(this.reviveTimer));
+          if (this.reviveTimer <= 0) this.gameOver();
+        }
         break;
       case 'title':
         // Cruise slowly behind the menu so the scene feels alive.
@@ -296,9 +467,9 @@ export class Game {
 
     const nitro = this.state === 'playing' && this.powerUps.has('nitro');
     const speedLines = nitro ? 1 : this.state === 'playing' ? THREE.MathUtils.clamp((this.difficulty - 0.3) / 0.5, 0, 1) : 0;
-    this.police.update(dt, this.player.x, (x, z) => this.obstacles.surfaceAt(x, z));
-    this.effects.update(dt * this.timeScale, dz, speedLines, this.speed * (nitro ? NITRO_SPEED_FACTOR : 1));
-    this.updateCamera(dt, nitro);
+    this.police.update(worldDt, this.player.x, (x, z) => this.obstacles.surfaceAt(x, z));
+    this.effects.update(worldDt * this.timeScale, dz, speedLines, this.speed * (nitro ? NITRO_SPEED_FACTOR : 1));
+    this.updateCamera(this.state === 'paused' ? 0 : dt, nitro);
     this.sky.position.copy(this.camera.position);
     this.renderer.render(this.scene, this.camera);
 
@@ -309,19 +480,21 @@ export class Game {
   /** One frame of gameplay; returns how far the world moved. */
   private play(dt: number) {
     const p = this.player;
-    for (const action of this.input.consume()) p.handle(action);
+    for (const action of this.input.consume()) if (this.tutorial.allows(action)) p.handle(action);
 
     this.powerUps.update(dt);
     if (p.flying && this.powerUps.timeLeft('flight') < FLIGHT_WARNING) p.blink(0.1);
     this.invulnerable = Math.max(0, this.invulnerable - dt);
 
-    this.speed = Math.min(MAX_SPEED, this.speed + SPEED_RAMP * dt);
+    if (!this.tutorial.active) this.speed = Math.min(MAX_SPEED, this.speed + SPEED_RAMP * dt);
     const nitro = this.powerUps.has('nitro');
     const worldSpeed = this.speed * (nitro ? NITRO_SPEED_FACTOR : 1);
     const dz = worldSpeed * dt;
+    this.distance += dz;
     this.score += dz * this.multiplier;
 
     this.advanceWorld(dz);
+    this.tutorial.scroll(dz);
     this.level.update(dz, this.difficulty);
     this.obstacles.update(dt, dz, this.speed);
 
@@ -355,7 +528,7 @@ export class Game {
     // Follow height loosely for hops, closely when riding a carrier, and only
     // partway when flying so the road visibly drops away below.
     const lift = p.flying ? 0.5 : p.y > 2 ? 0.8 : 0.35;
-    this.crashZoom = damp(this.crashZoom, this.state === 'crashed' || this.state === 'over' ? 1 : 0, 4, dt);
+    this.crashZoom = damp(this.crashZoom, ['crashed', 'revive', 'over'].includes(this.state) ? 1 : 0, 4, dt);
     this.landBump = damp(this.landBump, 0, 10, dt);
     this.cameraBase.x = damp(this.cameraBase.x, p.x * 0.6, 6, dt);
     this.cameraBase.y = damp(this.cameraBase.y, CAMERA_HEIGHT + p.y * lift - this.crashZoom * 0.8, 5, dt);

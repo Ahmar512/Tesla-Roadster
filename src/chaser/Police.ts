@@ -55,6 +55,11 @@ export class Police {
     return false;
   }
 
+  /** Drop back and stop chasing (the player revived). */
+  release() {
+    this.state = 'away';
+  }
+
   /** Pull up right behind the player (game over). */
   arrest() {
     this.state = 'caught';
