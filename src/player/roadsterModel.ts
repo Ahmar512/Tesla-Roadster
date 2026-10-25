@@ -6,8 +6,20 @@ import { createUnderglow } from './skins';
 
 export const WHEEL_RADIUS = 0.34;
 
-/** Thruster nozzle positions relative to the car, used to emit flames. */
+/** Rear thruster nozzle positions relative to the car; the nitro vapor streams from these. */
 export const NOZZLES = { x: [-0.35, 0.35], y: 0.42, z: 2.15 };
+
+/** Lift jets under the car, just inside each wheel [x, z]: white vapor blasts down from them in the air. */
+export const LIFT_JETS: [number, number][] = [
+  [-0.6, -1.3],
+  [0.6, -1.3],
+  [-0.62, 1.28],
+  [0.62, 1.28],
+];
+export const LIFT_JET_Y = 0.12;
+
+/** Height of the body's middle: the axis the car barrel-rolls around on a hop. */
+export const ROLL_PIVOT = 0.5;
 
 const GLASS = 0x1e2a3f;
 const TRIM = 0x17171c;

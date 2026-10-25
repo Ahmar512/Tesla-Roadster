@@ -47,7 +47,7 @@ npm run check:patterns   # verify every obstacle pattern can be beaten
 - Endless 3-lane highway with scrolling road, buildings and street lamps
 - Swipe controls that fire while the finger is still moving, with input buffering
   - ← → change lane
-  - ↑ thruster hop
+  - ↑ thruster hop: four white vapor jets blast down from under the car, and it barrel-rolls a full turn in the air, left side down first (tune with `JUMP_SPIN_TIME` in `src/config.ts`)
   - ↓ duck (fast-fall when airborne)
 - Keyboard controls for desktop: arrows/WASD, Space, Enter
 - Obstacles:
@@ -201,6 +201,14 @@ npm run check:patterns   # verify every obstacle pattern can be beaten
 - **Monetization decision:** rewarded ads only, for revive and ×2 cells. There are no forced ads and no in-app purchases at launch.
 - **Economy estimate:** a run that reaches about 30 m/s offers roughly 0.15 cells per meter, so a typical 2-minute run should earn around 200–250 cells. That makes a mid-price paint 3–5 runs and a skin 15–35 runs, before mission and daily rewards. Prices are in `src/meta/catalog.ts` and should be tuned after real playtesting.
 
+## Extras (added after Phase 6)
+
+- **Hop tricks:** swiping up fires four white vapor jets from under the car, and the car barrel-rolls a full turn in the air. Flight Mode and Nitro use the same white vapor instead of flames.
+- **Police helicopter:** at random times (first after 45–75 s of play, then every 55–95 s) a police helicopter swoops in ahead of the car and makes three attack runs. Each one locks onto your lane: a red strip flashes up the lane for about 1.1 s with a lock-on beep, then the guns rake it. Swipe left or right to get out of the way; a dodged volley scores +100 (× multiplier). Getting hit is a crash (a Shield absorbs it).
+  - **Always escapable:** when the helicopter is called, the level generator keeps a stretch of road completely empty, counted from beyond where any moving traffic already on the road could drift. The helicopter only fires inside that stretch, and skips a volley that wouldn't fit in what's left of it. There's always a free lane to swerve into, and a weaving line of cells to collect.
+  - It doesn't come during the tutorial or Flight Mode, and it leaves when you crash or revive.
+  - Tuning: `HELI_FIRST` and `HELI_EVERY` in `src/config.ts`; volley count and timings at the top of `src/chaser/Helicopter.ts`.
+
 ## Phase 7: Android release 🔲
 
 **Goal:** publish on Google Play.
@@ -237,7 +245,7 @@ src/
 ├── obstacles/           obstacle manager and vehicle models
 ├── pickups/             energy cells and power-up badges
 ├── player/              the roadster: controls, physics, visuals
-├── chaser/              police car
+├── chaser/              police car and police helicopter
 ├── audio/               synthesized music and sound effects
 ├── meta/                profile, shop catalog, missions, achievements, daily streak
 ├── services/            ads, leaderboard and achievements (stubs until Phase 7)

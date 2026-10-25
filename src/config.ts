@@ -19,6 +19,7 @@ export const JUMP_VELOCITY = 15;
 export const GRAVITY = 36;
 export const FAST_FALL_VELOCITY = -30;
 export const DUCK_TIME = 0.7;
+export const JUMP_SPIN_TIME = 0.75; // a hop barrel-rolls the car a full turn in this time (a hop lasts ~0.83 s)
 export const BOUNCE_VELOCITY = 9; // landing on top of a vehicle bounces you off it
 export const STUMBLE_SLOWDOWN = 0.85; // speed kept after clipping something
 export const GRACE_TIME = 1.2; // invulnerable blink after a stumble or power-up ends
@@ -30,6 +31,8 @@ export const MAGNET_RANGE = 45;
 
 // Chaser
 export const CHASE_TIME = 10; // a second stumble within this window gets you caught
+export const HELI_FIRST: [number, number] = [45, 75]; // seconds of play before the police helicopter first shows up
+export const HELI_EVERY: [number, number] = [55, 95]; // then this long between visits
 
 // World
 export const SPAWN_DISTANCE = 150; // obstacles appear this far ahead

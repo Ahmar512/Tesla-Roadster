@@ -5,6 +5,7 @@ import {
   FAST_FALL_VELOCITY,
   FLIGHT_HEIGHT,
   GRAVITY,
+  JUMP_SPIN_TIME,
   JUMP_VELOCITY,
   LANE_CHANGE_SHARPNESS,
   LANES,
@@ -15,13 +16,13 @@ import { curved } from '../render/materials';
 import { createBlobShadow } from '../render/shadow';
 import type { SkinId } from '../meta/catalog';
 import type { MergedParts } from '../render/geometry';
-import { buildRoadster, WHEEL_RADIUS } from './roadsterModel';
+import { buildRoadster, ROLL_PIVOT, WHEEL_RADIUS } from './roadsterModel';
 import { paintCar } from './skins';
 
-export { NOZZLES } from './roadsterModel';
+export { LIFT_JET_Y, LIFT_JETS, NOZZLES, ROLL_PIVOT } from './roadsterModel';
 
-const NOZZLE_IDLE = new THREE.Color(0x8a2a00);
-const NOZZLE_HOT = new THREE.Color(0xffe2a0);
+const NOZZLE_IDLE = new THREE.Color(0x3a3f4a);
+const NOZZLE_HOT = new THREE.Color(0xd8f0ff);
 
 export interface PlayerEvents {
   jump(): void;
@@ -59,6 +60,10 @@ export class Player {
   private vy = 0;
   private duckTimer = 0;
   private blinkTimer = 0;
+  /** Progress of the barrel roll on a hop: 0 → 1, and 1 when not rolling. */
+  private spin = 1;
+  private steerRoll = 0;
+  private neon = false;
 
   constructor() {
     this.buildModel();
@@ -73,6 +78,12 @@ export class Player {
     return !this.flying && this.y <= this.ground + 1e-3 && this.vy <= 0;
   }
 
+  /** Barrel-roll angle of the hop (radians, 0 when not rolling), eased in and out. */
+  get roll() {
+    const t = this.spin;
+    return t < 1 ? Math.PI * 2 * t * t * (3 - 2 * t) : 0;
+  }
+
   get currentLane() {
     return this.lane;
   }
@@ -85,6 +96,8 @@ export class Player {
     this.duckTimer = 0;
     this.blinkTimer = 0;
     this.flying = false;
+    this.spin = 1;
+    this.steerRoll = 0;
     this.shield.visible = false;
     this.model.visible = true;
     this.model.rotation.set(0, 0, 0);
@@ -108,6 +121,7 @@ export class Player {
         if (this.onGround) {
           this.vy = JUMP_VELOCITY;
           this.duckTimer = 0;
+          this.spin = 0;
           this.events?.jump();
         }
         break;
@@ -134,6 +148,7 @@ export class Player {
     this.vy = 0;
     this.duckTimer = 0;
     this.flying = false;
+    this.spin = 1;
   }
 
   /** Clipped something while changing lane: bounce back where we came from. */
@@ -192,6 +207,8 @@ export class Player {
       }
     }
     this.duckTimer = Math.max(0, this.duckTimer - dt);
+    // Landed before the roll finished (fast-fall): wrap it up quickly.
+    if (this.spin < 1) this.spin = Math.min(1, this.spin + ((this.onGround ? 4 : 1) * dt) / JUMP_SPIN_TIME);
 
     this.blinkTimer = Math.max(0, this.blinkTimer - dt);
     this.model.visible = this.blinkTimer === 0 || Math.floor(this.blinkTimer * 12) % 2 === 0;
@@ -212,13 +229,19 @@ export class Player {
     const { damp } = THREE.MathUtils;
     this.time += dt;
     this.object.position.x = this.x;
-    this.model.position.y = this.y;
 
-    // Steer into lane changes, pitch up while rising, squash while ducking.
+    // Steer into lane changes, barrel-roll a full turn on a hop (left side
+    // down first), pitch up while rising, squash while ducking.
     const rot = this.model.rotation;
     rot.y = damp(rot.y, -lateralVelocity * 0.015, 14, dt);
-    rot.z = damp(rot.z, -lateralVelocity * 0.006, 14, dt);
+    this.steerRoll = damp(this.steerRoll, -lateralVelocity * 0.006, 14, dt);
+    const roll = this.roll;
+    rot.z = this.steerRoll + roll;
     rot.x = damp(rot.x, THREE.MathUtils.clamp(verticalVelocity * 0.012, -0.35, 0.35), 10, dt);
+    // Roll around the middle of the body, not the wheels.
+    this.model.position.x = ROLL_PIVOT * Math.sin(roll);
+    this.model.position.y = this.y + ROLL_PIVOT * (1 - Math.cos(roll));
+    this.underglow.visible = this.neon && roll === 0;
 
     const squash = damp(this.model.scale.y, this.duckTimer > 0 ? 0.55 : 1, 14, dt);
     this.model.scale.set(1 + (1 - squash) * 0.25, squash, 1);
@@ -251,6 +274,7 @@ export class Player {
   /** Paint color and skin from the garage. */
   setLook(paint: number, skin: SkinId) {
     paintCar(this.shell, paint, skin);
-    this.underglow.visible = skin === 'neon';
+    this.neon = skin === 'neon';
+    this.underglow.visible = this.neon;
   }
 }

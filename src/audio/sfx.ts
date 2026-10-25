@@ -86,6 +86,24 @@ export const SOUNDS = {
     noise(s, { filter: 'highpass', freq: 5000, at: t + 0.06, duration: 0.5, gain: 0.18 });
   },
 
+  /** Helicopter locking onto a lane: quickening beeps that climb in pitch. */
+  lockOn(s: Synth) {
+    const t = s.ctx.currentTime;
+    [0, 0.3, 0.55, 0.75, 0.9, 1.0].forEach((at, i) =>
+      tone(s, { type: 'square', freq: 880 + i * 120, at: t + at, duration: 0.07, gain: 0.12, lowpass: 3500 }),
+    );
+  },
+
+  /** Helicopter guns: a rattle of sharp cracks. */
+  gunfire(s: Synth) {
+    const t = s.ctx.currentTime;
+    for (let i = 0; i < 14; i++) {
+      const at = t + i * 0.028;
+      noise(s, { filter: 'bandpass', freq: 1800 + Math.random() * 1200, q: 0.9, at, duration: 0.05, gain: 0.45 });
+      tone(s, { type: 'sine', freq: 160, to: 70, at, duration: 0.05, gain: 0.25 });
+    }
+  },
+
   /** Countdown beep; arg 0 is the higher "go" beep. */
   beep(s: Synth, n = 1) {
     tone(s, { type: 'square', freq: n > 0 ? 660 : 1320, duration: n > 0 ? 0.15 : 0.35, gain: 0.25, lowpass: 3000 });

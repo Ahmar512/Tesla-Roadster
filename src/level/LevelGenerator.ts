@@ -38,6 +38,8 @@ export class LevelGenerator {
   private skyLane = 1;
   /** Extra shield weight from the shield upgrade. */
   shieldBonus = 0;
+  /** While set, the road up to here is kept free of obstacles (helicopter attack). */
+  private clearUntilZ: number | null = null;
 
   constructor(
     private readonly obstacles: ObstacleManager,
@@ -53,11 +55,13 @@ export class LevelGenerator {
     this.untilPowerUp = THREE.MathUtils.randFloat(...POWER_UP_EVERY) * 0.5;
     this.reserved = [];
     this.skyUntilZ = null;
+    this.clearUntilZ = null;
   }
 
   update(dz: number, difficulty: number) {
     this.nextZ += dz;
     if (this.skyUntilZ !== null) this.skyUntilZ += dz;
+    if (this.clearUntilZ !== null) this.clearUntilZ += dz;
     for (const r of this.reserved) {
       r.nearZ += dz;
       r.farZ += dz;
@@ -66,6 +70,7 @@ export class LevelGenerator {
 
     while (this.nextZ > -SPAWN_DISTANCE) {
       if (this.skyUntilZ !== null) this.emitSky();
+      else if (this.clearUntilZ !== null) this.emitClear();
       else this.emitPattern(difficulty);
     }
   }
@@ -79,6 +84,31 @@ export class LevelGenerator {
     this.obstacles.clearRange(landZ + LANDING_ZONE / 2, landZ - LANDING_ZONE);
     this.pickups.clearRange(landZ + LANDING_ZONE / 2, landZ - LANDING_ZONE);
     this.skyUntilZ = landZ;
+  }
+
+  /**
+   * Keeps a stretch of road completely free of obstacles, for the helicopter
+   * attack. Nothing new spawns from the end of what's already laid out, and
+   * the stretch is only counted from beyond where moving traffic already on
+   * the road could have drifted. Returns how many meters ahead the empty
+   * stretch starts; it is `length` meters long.
+   */
+  clearAhead(length: number) {
+    const start = Math.min(this.nextZ, ...this.reserved.map((r) => r.farZ));
+    this.clearUntilZ = start - length;
+    return -start;
+  }
+
+  /** A line of cells weaving across the cleared stretch, so it isn't dead road. */
+  private emitClear() {
+    const until = this.clearUntilZ!;
+    let lane = THREE.MathUtils.randInt(0, 2);
+    for (let z = this.nextZ - 10; z > until; z -= CELL_SPACING) {
+      if (Math.random() < 0.06) lane = THREE.MathUtils.clamp(lane + (Math.random() < 0.5 ? -1 : 1), 0, 2);
+      this.pickups.spawnCell(LANES[lane], CELL_HEIGHT, z);
+    }
+    this.nextZ = until - CHUNK_GAP_START;
+    this.clearUntilZ = null;
   }
 
   private emitSky() {

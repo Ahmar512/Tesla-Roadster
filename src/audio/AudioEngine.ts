@@ -21,6 +21,7 @@ export class AudioEngine {
   private duckGain?: GainNode;
   private motor?: { gain: GainNode; whine: OscillatorNode; harmonic: OscillatorNode; filter: BiquadFilterNode };
   private siren?: GainNode;
+  private rotor?: GainNode;
   private track: Track | null = null;
   private ducked = false;
   private volumes = { music: 1, sfx: 1 };
@@ -82,6 +83,11 @@ export class AudioEngine {
     this.motor.harmonic.frequency.setTargetAtTime(f * 2.01, t, SMOOTH);
     this.motor.filter.frequency.setTargetAtTime(600 + f * 3, t, SMOOTH);
     this.motor.gain.gain.setTargetAtTime(level * 0.07, t, SMOOTH * 2);
+  }
+
+  /** Helicopter rotor thump, 0 (off) to 1 (overhead). */
+  setRotor(level: number) {
+    this.rotor?.gain.setTargetAtTime(level * 0.35, this.ctx!.currentTime, 0.2);
   }
 
   setSiren(on: boolean) {
@@ -157,5 +163,27 @@ export class AudioEngine {
     osc.start();
     sweep.start();
     this.siren = sirenGain;
+
+    // Rotor: low noise chopped by a ~13 Hz pulse, the "wop-wop" of the blades.
+    const rotorNoise = ctx.createBufferSource();
+    rotorNoise.buffer = this.synth!.noise;
+    rotorNoise.loop = true;
+    const rotorFilter = ctx.createBiquadFilter();
+    rotorFilter.type = 'lowpass';
+    rotorFilter.frequency.value = 320;
+    const chop = ctx.createGain();
+    chop.gain.value = 0.5;
+    const chopper = ctx.createOscillator();
+    chopper.type = 'sine';
+    chopper.frequency.value = 13;
+    const chopDepth = ctx.createGain();
+    chopDepth.gain.value = 0.5;
+    chopper.connect(chopDepth).connect(chop.gain);
+    const rotorGain = ctx.createGain();
+    rotorGain.gain.value = 0;
+    rotorNoise.connect(rotorFilter).connect(chop).connect(rotorGain).connect(this.sfxGain!);
+    rotorNoise.start();
+    chopper.start();
+    this.rotor = rotorGain;
   }
 }

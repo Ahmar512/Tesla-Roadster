@@ -16,7 +16,7 @@ export interface Burst {
   alpha?: number;
   gravity?: number;
   drag?: number;
-  /** Scrolls with the road (dust, flame trails) instead of hanging in the air. */
+  /** Scrolls with the road (dust, vapor trails) instead of hanging in the air. */
   worldLocked?: boolean;
 }
 

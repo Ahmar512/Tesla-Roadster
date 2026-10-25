@@ -2,6 +2,10 @@ import * as THREE from 'three';
 import {
   CAMERA_DISTANCE,
   CAMERA_HEIGHT,
+  HELI_EVERY,
+  HELI_FIRST,
+  LANE_WIDTH,
+  LANES,
   DESPAWN_Z,
   FOG_FAR,
   FOG_NEAR,
@@ -16,6 +20,7 @@ import {
 } from '../config';
 import { AudioEngine } from '../audio/AudioEngine';
 import type { Track } from '../audio/music';
+import { ATTACK_TIME, Helicopter } from '../chaser/Helicopter';
 import { Police } from '../chaser/Police';
 import { Effects } from '../fx/Effects';
 import { MAX_UPGRADE, PAINTS, powerUpDuration, REVIVE_BASE_PRICE, SHIELD_WEIGHT_PER_LEVEL } from '../meta/catalog';
@@ -55,6 +60,7 @@ const GARAGE_SPIN = 0.35; // radians per second the garage camera circles the ca
 const CAMERA_NEAR = 0.1;
 const GARAGE_NEAR = 3;
 const CARRIER_DECK = 1.5; // driving higher than this means riding a carrier
+const DODGE_POINTS = 100; // for getting out of the way of a helicopter volley
 const CELL_STREAK_GAP = 0.5; // cells collected closer together than this keep the chime climbing
 
 const MUSIC_FOR: Record<State, Track | null> = {
@@ -90,6 +96,7 @@ export class Game {
   private readonly quality: AutoQuality;
   private readonly player = new Player();
   private readonly police = new Police();
+  private readonly helicopter = new Helicopter();
   private readonly powerUps = new PowerUps();
   private readonly road: Road;
   private readonly scenery: Scenery;
@@ -117,6 +124,8 @@ export class Game {
   private cellsDoubled = false;
   private riding = false;
   private garageAngle = 0;
+  /** Seconds of play until the police helicopter is called in. */
+  private heliTimer = 0;
   private cellStreak = 0;
   private cellStreakTimer = 0;
   private reviveTimer = 0;
@@ -148,7 +157,7 @@ export class Game {
     this.level = new LevelGenerator(this.obstacles, this.pickups);
     this.tutorial = new Tutorial(this.obstacles, this.pickups);
     this.effects = new Effects(this.scene, this.camera);
-    this.scene.add(this.player.object, this.police.object);
+    this.scene.add(this.player.object, this.police.object, this.helicopter.object, this.helicopter.strip);
     this.player.reset();
     this.wireEvents();
 
@@ -229,6 +238,17 @@ export class Game {
 
     this.powerUps.durationOf = (type) => powerUpDuration(type, meta.data.upgrades[type]);
     this.police.onEscape = () => meta.add('escapes');
+    this.helicopter.onWarn = () => this.audio.play('lockOn');
+    this.helicopter.onFire = () => {
+      this.audio.play('gunfire');
+      this.shake = Math.max(this.shake, 0.12);
+    };
+    this.helicopter.onDodged = () => {
+      if (this.state !== 'playing') return;
+      const points = DODGE_POINTS * this.multiplier;
+      this.score += points;
+      this.hud.popup(`DODGED! +${points}`);
+    };
     this.environment.onZoneChange = (zone) => {
       this.hud.popup(ZONE_NAMES[zone], true);
       if (zone !== 'city' && this.state === 'playing') meta.add(zone);
@@ -366,6 +386,7 @@ export class Game {
     this.adRevived = false;
     this.riding = false;
     this.meta.startRun();
+    this.heliTimer = THREE.MathUtils.randFloat(...HELI_FIRST);
     const { upgrades } = this.meta.data;
     this.level.shieldBonus = upgrades.shield * SHIELD_WEIGHT_PER_LEVEL;
     this.hud.reset();
@@ -382,6 +403,7 @@ export class Game {
     this.environment.reset();
     this.player.reset();
     this.police.reset();
+    this.helicopter.reset();
     this.obstacles.reset();
     this.pickups.reset();
     this.level.reset();
@@ -457,6 +479,7 @@ export class Game {
   private continueRun() {
     this.obstacles.clearRange(DESPAWN_Z, -REVIVE_CLEAR);
     this.police.release();
+    this.helicopter.leave();
     this.powerUps.reset();
     this.player.revive();
     this.player.setShield(false);
@@ -510,21 +533,46 @@ export class Game {
       return;
     }
     if (this.invulnerable > 0) return;
-    if (this.powerUps.has('shield')) {
-      this.powerUps.consume('shield');
-      this.player.setShield(false);
+    if (this.useShield()) {
       this.obstacles.knock(obstacle, this.player.x);
-      this.effects.shieldBreak(this.player.x, this.player.y);
-      this.audio.play('shieldBreak');
-      this.meta.add('shieldBlocks');
-      this.settings.haptic('hit');
-      this.invulnerable = GRACE_TIME;
-      this.player.blink(GRACE_TIME);
-      this.shake = 0.25;
       return;
     }
     if (kind === 'side') this.stumble();
     else this.crash();
+  }
+
+  /** If a shield is up, it takes the hit; returns whether it did. */
+  private useShield() {
+    if (!this.powerUps.has('shield')) return false;
+    this.powerUps.consume('shield');
+    this.player.setShield(false);
+    this.effects.shieldBreak(this.player.x, this.player.y);
+    this.audio.play('shieldBreak');
+    this.meta.add('shieldBlocks');
+    this.settings.haptic('hit');
+    this.invulnerable = GRACE_TIME;
+    this.player.blink(GRACE_TIME);
+    this.shake = 0.25;
+    return true;
+  }
+
+  /** Caught in the helicopter's gunfire. */
+  private shot() {
+    this.helicopter.markHit();
+    if (this.invulnerable > 0 || this.useShield()) return;
+    this.crash();
+  }
+
+  /**
+   * Calls in the helicopter: the level keeps a stretch of road empty, long
+   * enough for the whole attack at the current speed (with some slack, and
+   * more on nitro), and the helicopter only fires inside it.
+   */
+  private callHelicopter() {
+    const speed = this.speed * (this.powerUps.has('nitro') ? NITRO_SPEED_FACTOR : 1);
+    const length = (ATTACK_TIME + 1.5) * speed * 1.2;
+    this.helicopter.start(this.level.clearAhead(length), length);
+    this.hud.popup('POLICE CHOPPER!', true);
   }
 
   /** Clipped something sideways: lose speed, and the police start chasing. */
@@ -549,6 +597,7 @@ export class Game {
     this.setState('crashed');
     this.crashTimer = CRASH_DELAY;
     this.police.arrest();
+    this.helicopter.leave();
     this.tutorial.stop();
     this.settings.haptic('crash');
     if (this.caught) {
@@ -663,6 +712,10 @@ export class Game {
         break;
     }
 
+    // After a crash the helicopter keeps animating as it flies off.
+    if (this.state === 'crashed' || this.state === 'revive' || this.state === 'over') {
+      this.helicopter.update(dt, 0, this.player.x, this.player.currentLane, 0);
+    }
     const nitro = this.state === 'playing' && this.powerUps.has('nitro');
     const speedLines = nitro ? 1 : this.state === 'playing' ? THREE.MathUtils.clamp((this.difficulty - 0.3) / 0.5, 0, 1) : 0;
     this.police.update(worldDt, this.player.x, (x, z) => this.obstacles.surfaceAt(x, z));
@@ -696,6 +749,7 @@ export class Game {
     this.distance += dz;
     this.score += dz * this.multiplier;
 
+    this.updateHelicopter(dt, dz);
     this.environment.update(this.distance);
     this.advanceWorld(dz);
     this.tutorial.scroll(dz);
@@ -704,7 +758,8 @@ export class Game {
 
     p.getBox(this.playerBox);
     p.update(dt, worldSpeed, this.obstacles.groundAt(this.playerBox, this.prevPlayerBox));
-    if (!p.onGround || nitro) this.effects.thrusterTrail(dt, p.x, p.y);
+    if (!p.onGround) this.effects.thrusterTrail(dt, p.x, p.y, p.roll);
+    if (nitro) this.effects.nitroTrail(dt, p.x, p.y);
     const riding = p.onGround && p.y > CARRIER_DECK;
     if (riding && !this.riding) this.meta.add('carriers');
     this.riding = riding;
@@ -713,6 +768,11 @@ export class Game {
     this.pickups.update(dt, dz, this.playerCenter, this.powerUps.has('magnet'));
 
     p.getBox(this.playerBox);
+    const firing = this.helicopter.firingLane;
+    if (firing !== null && !p.flying && Math.abs(p.x - LANES[firing]) < LANE_WIDTH / 2) {
+      this.shot();
+      if (this.state !== 'playing') return dz;
+    }
     const hit = this.obstacles.collide(this.playerBox, this.prevPlayerBox);
     if (hit) this.handleHit(hit);
     this.prevPlayerBox.copy(this.playerBox);
@@ -725,11 +785,26 @@ export class Game {
     return dz;
   }
 
+  private updateHelicopter(dt: number, dz: number) {
+    const heli = this.helicopter;
+    // Not during the tutorial, and not while flying (the road ahead is sky cells then).
+    if (!heli.active && !this.tutorial.active && !this.player.flying) {
+      this.heliTimer -= dt;
+      if (this.heliTimer <= 0) {
+        this.heliTimer = THREE.MathUtils.randFloat(...HELI_EVERY);
+        this.callHelicopter();
+      }
+    }
+    heli.update(dt, dz, this.player.x, this.player.currentLane, this.speed * (this.powerUps.has('nitro') ? NITRO_SPEED_FACTOR : 1));
+    if (heli.firingLane !== null) this.effects.gunfire(dt, heli.gunPosition, LANES[heli.firingLane]);
+  }
+
   /** The motor whine follows the car's speed; the siren plays while the police are around. */
   private updateAudio(dt: number, dz: number, nitro: boolean) {
     const loud = this.state === 'playing' ? 1 : this.state === 'title' ? 0.35 : 0;
     this.audio.setMotor(loud, dt > 0 ? dz / dt : 0, nitro);
     this.audio.setSiren(this.police.active && SIREN_STATES.includes(this.state));
+    this.audio.setRotor(this.helicopter.active && this.state !== 'paused' ? 1 : 0);
     this.cellStreakTimer -= dt;
   }
 
